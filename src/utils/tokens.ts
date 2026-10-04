@@ -14,6 +14,13 @@ const cookieOptions = {
   path: "/api/auth",
 };
 
+const flagCookieOptions = {
+  httpOnly: false,
+  secure: process.env.NODE_ENV === "production",
+  sameSite: "lax" as const,
+  path: "/",
+};
+
 export const generateAccessToken = (user: { id: string; email: string }) => {
   const jwtSecret = process.env.JWT_SECRET;
   if (!jwtSecret) throw new Error("JWT_SECRET is not defined");
@@ -45,8 +52,13 @@ export const setRefreshCookie = (res: Response, rawToken: string) => {
     ...cookieOptions,
     maxAge: REFRESH_MAX_AGE,
   });
+  res.cookie("relay_session", "1", {
+    ...flagCookieOptions,
+    maxAge: REFRESH_MAX_AGE,
+  });
 };
 
 export const clearRefreshCookie = (res: Response) => {
   res.clearCookie("refreshToken", cookieOptions);
+  res.clearCookie("relay_session", flagCookieOptions);
 };
