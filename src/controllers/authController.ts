@@ -10,6 +10,8 @@ import {
   hashToken,
   setRefreshCookie,
 } from "../utils/tokens.js";
+import { generateVerificationCode } from "../utils/generateVerificationCode.js";
+import { sendVerificationEmail } from "../lib/email.js";
 
 const client = new OAuth2Client(
   process.env.GOOGLE_CLIENT_ID,
@@ -47,27 +49,29 @@ export const register = async (req: Request, res: Response) => {
 
     const hashedPassword = await bcrypt.hash(password, 12);
 
+    const verificationCode = generateVerificationCode();
+    const verificationCodeExpire = new Date(Date.now() + 15 * 60 * 1000);
+
     const newUser = await db.user.create({
       data: {
         name,
         username,
         email,
         password: hashedPassword,
+        verificationCode,
+        verificationCodeExpire,
       },
       select: {
-        id: true,
-        name: true,
-        username: true,
         email: true,
-        createdAt: true,
-        isEmailVerified: true,
       },
     });
+
+    await sendVerificationEmail(email, verificationCode);
 
     return res.status(201).json({
       success: true,
       message: "Account Created Successfully.",
-      user: newUser,
+      email: newUser.email,
     });
   } catch (error: any) {
     console.error("Register Error:", error);

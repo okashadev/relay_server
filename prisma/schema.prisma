@@ -35,6 +35,9 @@ model User {
   isEmailVerified Boolean      @default(false)
   emailVerifiedAt DateTime?
 
+  verificationCode       String?
+  verificationCodeExpire DateTime?
+
   // Auth tokens
   refreshTokens RefreshToken[]
 

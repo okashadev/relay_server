@@ -3,7 +3,12 @@ import { disconnectDb } from "./config/db.js";
 
 import app from "./app.js";
 
-const requiredEnv = ["JWT_SECRET", "GOOGLE_CLIENT_ID", "DATABASE_URL"];
+const requiredEnv = [
+  "JWT_SECRET",
+  "GOOGLE_CLIENT_ID",
+  "GOOGLE_CLIENT_SECRET",
+  "DATABASE_URL",
+];
 
 for (const key of requiredEnv) {
   if (!process.env[key]) {
