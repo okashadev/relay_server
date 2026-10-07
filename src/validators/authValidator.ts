@@ -22,6 +22,11 @@ const emailField = z
   .max(254, "Email is too long.")
   .pipe(z.email("Please enter a valid email address."));
 
+const codeField = z
+  .string({ error: "Verification code is required." })
+  .transform((value) => value.replace(/\s+/g, "").toUpperCase())
+  .pipe(z.string().regex(/^[A-HJ-KM-NP-Z2-9]{8}$/, "Invalid or expired code."));
+
 const withinBcryptLimit = (value: string) =>
   Buffer.byteLength(value, "utf8") <= MAX_PASSWORD_BYTES;
 
@@ -61,4 +66,13 @@ export const loginSchema = z.object({
     .string({ error: "Password is required." })
     .min(1, "Password is required.")
     .refine(withinBcryptLimit, "Invalid email or password."),
+});
+
+export const verifyEmailSchema = z.object({
+  email: emailField,
+  code: codeField,
+});
+
+export const resendCodeSchema = z.object({
+  email: emailField,
 });

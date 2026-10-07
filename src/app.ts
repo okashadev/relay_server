@@ -3,12 +3,32 @@ import cors from "cors";
 import helmet from "helmet";
 import authRouter from "./routes/authRoutes.js";
 import cookieParser from "cookie-parser";
+import friendRouter from "./routes/friendRoutes.js";
+import notificationRouter from "./routes/notificationRoutes.js";
 
 const app = express();
 
-if (process.env.TRUST_PROXY) {
-  app.set("trust proxy", Number(process.env.TRUST_PROXY));
-}
+// if (process.env.TRUST_PROXY) {
+//   app.set("trust proxy", Number(process.env.TRUST_PROXY));
+// }
+
+app.use((req, res, next) => {
+  const start = Date.now();
+  console.log(`--> ${req.method} ${req.originalUrl}`);
+
+  res.on("finish", () =>
+    console.log(
+      `<-- ${req.method} ${req.originalUrl} ${res.statusCode} ${Date.now() - start}ms`,
+    ),
+  );
+  res.on("close", () => {
+    if (!res.writableFinished) {
+      console.log(`xx- ${req.method} ${req.originalUrl} connection toot gaya`);
+    }
+  });
+
+  next();
+});
 
 app.use(helmet());
 app.use(
@@ -25,6 +45,8 @@ app.get("/api/health", (_req, res) => {
 });
 
 app.use("/api/auth", authRouter);
+app.use("/api/friends", friendRouter);
+app.use("/api/notifications", notificationRouter);
 
 app.use((_req, res) => {
   res.status(404).json({ success: false, error: "Route not found." });

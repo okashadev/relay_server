@@ -3,7 +3,7 @@ import transporter from "./nodemailer.js";
 export const sendVerificationEmail = async (email: string, code: string) => {
   try {
     const mailOptions = {
-      from: `"Relay App" <${process.env.SENDER_EMAIL || process.env.SMTP_USER}>`,
+      from: `"Relay App" <${process.env.SENDER_EMAIL || process.env.BREVO_SMTP_USER}>`,
       to: email,
       subject: "Verify Your Email - Relay",
       html: `

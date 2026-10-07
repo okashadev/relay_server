@@ -1,8 +1,14 @@
+import { sendVerificationEmail } from "../lib/email.js";
+import { OAuth2Client } from "google-auth-library";
 import { Request, Response } from "express";
-import { loginSchema, registerSchema } from "../validators/authValidator.js";
 import { db } from "../config/db.js";
 import bcrypt from "bcrypt";
-import { OAuth2Client } from "google-auth-library";
+import {
+  loginSchema,
+  registerSchema,
+  verifyEmailSchema,
+  resendCodeSchema,
+} from "../validators/authValidator.js";
 import {
   clearRefreshCookie,
   createRefreshToken,
@@ -10,14 +16,24 @@ import {
   hashToken,
   setRefreshCookie,
 } from "../utils/tokens.js";
-import { generateVerificationCode } from "../utils/generateVerificationCode.js";
-import { sendVerificationEmail } from "../lib/email.js";
+import {
+  generateVerificationCode,
+  hashVerificationCode,
+  isVerificationCodeValid,
+  MAX_VERIFICATION_ATTEMPTS,
+  VERIFICATION_CODE_TTL_MS,
+  RESEND_COOLDOWN_MS,
+} from "../utils/generateVerificationCode.js";
 
 const client = new OAuth2Client(
   process.env.GOOGLE_CLIENT_ID,
   process.env.GOOGLE_CLIENT_SECRET,
   "postmessage",
 );
+
+const INVALID_CODE_ERROR = "Invalid or expired code.";
+const RESEND_MESSAGE =
+  "If this email is awaiting verification, a new code has been sent.";
 
 export const register = async (req: Request, res: Response) => {
   try {
@@ -36,10 +52,23 @@ export const register = async (req: Request, res: Response) => {
       where: {
         OR: [{ email }, { username }],
       },
-      select: { email: true, username: true },
+      select: {
+        id: true,
+        email: true,
+        username: true,
+        provider: true,
+        isEmailVerified: true,
+        verificationLastSentAt: true,
+      },
     });
 
-    if (existingUser) {
+    const reclaimable =
+      existingUser !== null &&
+      existingUser.email === email &&
+      existingUser.provider === "LOCAL" &&
+      !existingUser.isEmailVerified;
+
+    if (existingUser && !reclaimable) {
       const field = existingUser.email === email ? "Email" : "Username";
       return res.status(400).json({
         success: false,
@@ -47,33 +76,79 @@ export const register = async (req: Request, res: Response) => {
       });
     }
 
+    if (reclaimable) {
+      const lastSent = existingUser.verificationLastSentAt?.getTime() ?? 0;
+      const waitMs = RESEND_COOLDOWN_MS - (Date.now() - lastSent);
+
+      if (waitMs > 0) {
+        return res.status(429).json({
+          success: false,
+          error: `Please wait ${Math.ceil(waitMs / 1000)} seconds before trying again.`,
+        });
+      }
+    }
+
     const hashedPassword = await bcrypt.hash(password, 12);
 
     const verificationCode = generateVerificationCode();
-    const verificationCodeExpire = new Date(Date.now() + 15 * 60 * 1000);
 
-    const newUser = await db.user.create({
-      data: {
-        name,
-        username,
-        email,
-        password: hashedPassword,
-        verificationCode,
-        verificationCodeExpire,
-      },
-      select: {
-        email: true,
-      },
-    });
+    const verificationData = {
+      verificationCode: hashVerificationCode(verificationCode),
+      verificationCodeExpire: new Date(Date.now() + VERIFICATION_CODE_TTL_MS),
+      verificationAttempts: 0,
+      verificationLastSentAt: new Date(),
+    };
 
-    await sendVerificationEmail(email, verificationCode);
+    const user = reclaimable
+      ? await db.user.update({
+          where: { id: existingUser.id },
+          data: {
+            name,
+            username,
+            password: hashedPassword,
+            ...verificationData,
+          },
+          select: { id: true, email: true },
+        })
+      : await db.user.create({
+          data: {
+            name,
+            username,
+            email,
+            password: hashedPassword,
+            ...verificationData,
+          },
+          select: { id: true, email: true },
+        });
+
+    try {
+      await sendVerificationEmail(user.email, verificationCode);
+    } catch (emailError) {
+      await db.user
+        .delete({ where: { id: user.id } })
+        .catch((cleanupError) =>
+          console.error("Cleanup failed:", cleanupError),
+        );
+
+      return res.status(502).json({
+        success: false,
+        error: "We couldn't send the verification email. Please try again.",
+      });
+    }
 
     return res.status(201).json({
       success: true,
-      message: "Account Created Successfully.",
-      email: newUser.email,
+      message: "Account created. Please verify your email.",
+      email: user.email,
     });
   } catch (error: any) {
+    if (error?.code === "P2002") {
+      return res.status(400).json({
+        success: false,
+        error: "Email or username already exists.",
+      });
+    }
+
     console.error("Register Error:", error);
     return res
       .status(500)
@@ -176,9 +251,17 @@ export const googleAuth = async (req: Request, res: Response) => {
       });
     }
 
+    const t0 = Date.now();
+    const step = (label: string) =>
+      console.log(`[google] ${label} +${Date.now() - t0}ms`);
+
+    step("request aayi");
+
     let payload;
     try {
+      step("exchange shuru");
       const { tokens } = await client.getToken(code);
+      step("exchange mukammal");
 
       if (!tokens.id_token) {
         throw new Error("No id_token received from Google");
@@ -189,6 +272,7 @@ export const googleAuth = async (req: Request, res: Response) => {
         audience: process.env.GOOGLE_CLIENT_ID,
       });
       payload = ticket.getPayload();
+      step("verify mukammal");
     } catch (err: any) {
       console.error("Google code exchange error:", err);
       return res.status(401).json({
@@ -216,6 +300,8 @@ export const googleAuth = async (req: Request, res: Response) => {
     let user = await db.user.findUnique({
       where: { email },
     });
+
+    step("db find mukammal");
 
     if (user && user.provider === "LOCAL") {
       return res.status(409).json({
@@ -257,12 +343,16 @@ export const googleAuth = async (req: Request, res: Response) => {
           emailVerifiedAt: new Date(),
         },
       });
+
+      step("db create mukammal");
+
     }
 
     const accessToken = generateAccessToken(user);
     const refreshToken = await createRefreshToken(user.id);
     setRefreshCookie(res, refreshToken);
 
+    step("response bhej raha hun");
     return res.status(200).json({
       success: true,
       message: "Google Authentication successful",
@@ -384,5 +474,178 @@ export const logout = async (req: Request, res: Response) => {
       success: false,
       error: "Something went wrong.",
     });
+  }
+};
+
+export const verifyEmail = async (req: Request, res: Response) => {
+  try {
+    const validationResult = verifyEmailSchema.safeParse(req.body);
+
+    if (!validationResult.success) {
+      return res.status(400).json({
+        success: false,
+        error: validationResult.error.issues[0].message,
+      });
+    }
+
+    const { email, code } = validationResult.data;
+
+    const user = await db.user.findUnique({
+      where: {
+        email,
+      },
+    });
+
+    if (
+      !user ||
+      user.provider !== "LOCAL" ||
+      user.isEmailVerified ||
+      !user.verificationCode ||
+      !user.verificationCodeExpire ||
+      user.verificationCodeExpire < new Date()
+    ) {
+      return res
+        .status(400)
+        .json({ success: false, error: INVALID_CODE_ERROR });
+    }
+
+    const attempt = await db.user.updateMany({
+      where: {
+        id: user.id,
+        verificationAttempts: { lt: MAX_VERIFICATION_ATTEMPTS },
+      },
+      data: { verificationAttempts: { increment: 1 } },
+    });
+
+    if (attempt.count === 0) {
+      return res.status(429).json({
+        success: false,
+        error: "Too many incorrect attempts. Please request a new code.",
+      });
+    }
+
+    if (!isVerificationCodeValid(code, user.verificationCode)) {
+      return res
+        .status(400)
+        .json({ success: false, error: INVALID_CODE_ERROR });
+    }
+
+    const verifiedUser = await db.user.update({
+      where: { id: user.id },
+      data: {
+        isEmailVerified: true,
+        emailVerifiedAt: new Date(),
+        verificationCode: null,
+        verificationCodeExpire: null,
+        verificationAttempts: 0,
+        verificationLastSentAt: null,
+      },
+      select: {
+        id: true,
+        name: true,
+        username: true,
+        email: true,
+        avatar: true,
+        isEmailVerified: true,
+      },
+    });
+
+    const accessToken = generateAccessToken(verifiedUser);
+    const refreshToken = await createRefreshToken(verifiedUser.id);
+    setRefreshCookie(res, refreshToken);
+
+    return res.status(200).json({
+      success: true,
+      message: "Email verified successfully.",
+      token: accessToken,
+      user: verifiedUser,
+    });
+  } catch (error: any) {
+    console.error("Verify Email Error:", error);
+    return res
+      .status(500)
+      .json({ success: false, error: "Something went wrong." });
+  }
+};
+
+export const resendVerificationCode = async (req: Request, res: Response) => {
+  try {
+    const validationResult = resendCodeSchema.safeParse(req.body);
+
+    if (!validationResult.success) {
+      return res.status(400).json({
+        success: false,
+        error: validationResult.error.issues[0].message,
+      });
+    }
+
+    const { email } = validationResult.data;
+
+    const user = await db.user.findUnique({
+      where: {
+        email,
+      },
+      select: {
+        id: true,
+        email: true,
+        provider: true,
+        isEmailVerified: true,
+        verificationLastSentAt: true,
+      },
+    });
+
+    if (!user || user.provider !== "LOCAL" || user.isEmailVerified) {
+      return res.status(200).json({ success: true, message: RESEND_MESSAGE });
+    }
+
+    const verificationCode = generateVerificationCode();
+    const cutoff = new Date(Date.now() - RESEND_COOLDOWN_MS);
+
+    const claimed = await db.user.updateMany({
+      where: {
+        id: user.id,
+        OR: [
+          { verificationLastSentAt: null },
+          { verificationLastSentAt: { lte: cutoff } },
+        ],
+      },
+      data: {
+        verificationCode: hashVerificationCode(verificationCode),
+        verificationCodeExpire: new Date(Date.now() + VERIFICATION_CODE_TTL_MS),
+        verificationAttempts: 0,
+        verificationLastSentAt: new Date(),
+      },
+    });
+
+    if (claimed.count === 0) {
+      const lastSent = user.verificationLastSentAt?.getTime() ?? Date.now();
+      const retryAfterSeconds = Math.max(
+        1,
+        Math.ceil((RESEND_COOLDOWN_MS - (Date.now() - lastSent)) / 1000),
+      );
+
+      return res.status(429).json({
+        success: false,
+        error: `Please wait ${retryAfterSeconds} seconds before requesting a new code.`,
+        retryAfterSeconds,
+      });
+    }
+
+    try {
+      await sendVerificationEmail(user.email, verificationCode);
+    } catch (emailError) {
+      console.error("Resend email failed:", emailError);
+      return res.status(502).json({
+        success: false,
+        error: "We couldn't send the email. Please try again in a minute.",
+      });
+    }
+
+    return res.status(200).json({ success: true, message: RESEND_MESSAGE });
+  } catch (error: any) {
+    console.error("Resend Code Error:", error);
+    return res
+      .status(500)
+      .json({ success: false, error: "Something went wrong." });
   }
 };
