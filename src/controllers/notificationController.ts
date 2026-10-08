@@ -3,6 +3,7 @@ import { Response, Request } from "express";
 import { AuthenticatedRequest } from "../middlewares/authMiddleware.js";
 import { notificationsQuerySchema } from "../validators/notificationValidator.js";
 import { db } from "../config/db.js";
+import { notificationSelect } from "../lib/notificationSelect.js";
 
 const unauthorized = (res: Response) =>
   res.status(401).json({
@@ -66,16 +67,7 @@ export const getNotifications = async (
       where,
       orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       take: limit + 1,
-      select: {
-        id: true,
-        type: true,
-        isRead: true,
-        createdAt: true,
-        actor: {
-          select: { id: true, name: true, username: true, avatar: true },
-        },
-        friendship: { select: { id: true, status: true } },
-      },
+      select: notificationSelect,
     });
 
     const hasMore = rows.length > limit;

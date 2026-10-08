@@ -1,13 +1,16 @@
-import { Response } from "express";
 import { AuthenticatedRequest } from "../middlewares/authMiddleware.js";
+import { notificationSelect } from "../lib/notificationSelect.js";
+import { emitToUser } from "../socket/socketServer.js";
+import { SOCKET_EVENTS } from "../socket/events.js";
+import { Prisma } from "@prisma/client";
+import { db } from "../config/db.js";
+import { Response } from "express";
 import {
   requestIdParamSchema,
   searchQuerySchema,
   sendRequestSchema,
   suggestionsQuerySchema,
 } from "../validators/friendValidator.js";
-import { db } from "../config/db.js";
-import { FriendStatus, Prisma } from "@prisma/client";
 
 const SEARCH_LIMIT = 15;
 const MAX_FRIENDS = 500;
@@ -50,6 +53,18 @@ const unauthorized = (res: Response) =>
 
 const serverError = (res: Response) =>
   res.status(500).json({ success: false, error: "Something went wrong." });
+
+const notifyRelationship = (
+  targetUserId: string,
+  otherUserId: string,
+  relationship: Relationship,
+  friendshipId: string,
+) =>
+  emitToUser(targetUserId, SOCKET_EVENTS.FRIENDSHIP_UPDATED, {
+    userId: otherUserId,
+    relationship,
+    friendshipId,
+  });
 
 const attachRelationships = async (
   currentUserId: string,
@@ -262,7 +277,7 @@ export const sendFriendRequest = async (
         });
       }
 
-      const accepted = await db.$transaction(async (tx) => {
+      const notification = await db.$transaction(async (tx) => {
         const updated = await tx.friendship.updateMany({
           where: { id: existing.id, status: "PENDING" },
           data: { status: "ACCEPTED" },
@@ -270,24 +285,33 @@ export const sendFriendRequest = async (
 
         if (updated.count === 0) return false;
 
-        await tx.notification.create({
+        return tx.notification.create({
           data: {
             userId: receiverId,
             actorId: senderId,
             type: "FRIEND_ACCEPTED",
             friendshipId: existing.id,
           },
+          select: notificationSelect,
         });
-
-        return true;
       });
 
-      if (!accepted) {
+      if (!notification) {
         return res.status(409).json({
           success: false,
           error: "This request just changed. Please refresh and try again.",
         });
       }
+
+      emitToUser(receiverId, SOCKET_EVENTS.NOTIFICATION_NEW, notification);
+      notifyRelationship(receiverId, senderId, "FRIENDS", existing.id);
+
+      return res.status(200).json({
+        success: true,
+        message: "You are now friends.",
+        relationship: "FRIENDS",
+        friendshipId: existing.id,
+      });
     }
 
     const created = await db.$transaction(async (tx) => {
@@ -296,23 +320,36 @@ export const sendFriendRequest = async (
         select: { id: true },
       });
 
-      await tx.notification.create({
+      const notification = await tx.notification.create({
         data: {
           userId: receiverId,
           actorId: senderId,
           type: "FRIEND_REQUEST",
           friendshipId: friendship.id,
         },
+        select: notificationSelect,
       });
 
-      return friendship;
+      return { friendship, notification };
     });
+
+    emitToUser(
+      receiverId,
+      SOCKET_EVENTS.NOTIFICATION_NEW,
+      created.notification,
+    );
+    notifyRelationship(
+      receiverId,
+      senderId,
+      "REQUEST_RECEIVED",
+      created.friendship.id,
+    );
 
     return res.status(201).json({
       success: true,
       message: "Friend request sent.",
       relationship: "REQUEST_SENT",
-      friendshipId: created.id,
+      friendshipId: created.friendship.id,
     });
   } catch (error: any) {
     if (error?.code === "P2002") {
@@ -346,11 +383,20 @@ export const cancelFriendRequest = async (
 
     const { id } = paramsResult.data;
 
+    const pending = await db.friendship.findFirst({
+      where: { id, senderId: userId, status: "PENDING" },
+      select: { receiverId: true },
+    });
+
     const deleted = await db.friendship.deleteMany({
       where: { id, senderId: userId, status: "PENDING" },
     });
 
     if (deleted.count > 0) {
+      if (pending) {
+        notifyRelationship(pending.receiverId, userId, "NONE", id);
+      }
+
       return res.status(200).json({
         success: true,
         message: "Friend request cancelled.",
@@ -379,7 +425,7 @@ export const cancelFriendRequest = async (
       relationship: "NONE" as const,
       friendshipId: null,
     });
-  } catch (error) {
+  } catch (error: any) {
     console.error("Cancel Friend Request Error:", error);
     return serverError(res);
   }
@@ -425,21 +471,22 @@ export const acceptFriendRequest = async (
       });
     }
 
-    const accepted = await db.$transaction(async (tx) => {
+    const notification = await db.$transaction(async (tx) => {
       const updated = await tx.friendship.updateMany({
         where: { id, receiverId: userId, status: "PENDING" },
         data: { status: "ACCEPTED" },
       });
 
-      if (updated.count === 0) return false;
+      if (updated.count === 0) return null;
 
-      await tx.notification.create({
+      const created = await tx.notification.create({
         data: {
           userId: friendship.senderId,
           actorId: userId,
           type: "FRIEND_ACCEPTED",
           friendshipId: id,
         },
+        select: notificationSelect,
       });
 
       await tx.notification.updateMany({
@@ -447,10 +494,10 @@ export const acceptFriendRequest = async (
         data: { isRead: true },
       });
 
-      return true;
+      return created;
     });
 
-    if (!accepted) {
+    if (!notification) {
       const current = await db.friendship.findFirst({
         where: { id, receiverId: userId },
         select: { id: true, status: true },
@@ -470,6 +517,9 @@ export const acceptFriendRequest = async (
         error: "Friend request not found.",
       });
     }
+
+    emitToUser(friendship.senderId, SOCKET_EVENTS.NOTIFICATION_NEW, notification);
+    notifyRelationship(friendship.senderId, userId, "FRIENDS", id);
 
     return res.status(200).json({
       success: true,

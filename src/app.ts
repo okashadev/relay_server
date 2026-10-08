@@ -1,4 +1,10 @@
-import express, { ErrorRequestHandler } from "express";
+import express, {
+  ErrorRequestHandler,
+  type Express,
+  type NextFunction,
+  type Request,
+  type Response,
+} from "express";
 import cors from "cors";
 import helmet from "helmet";
 import authRouter from "./routes/authRoutes.js";
@@ -6,13 +12,13 @@ import cookieParser from "cookie-parser";
 import friendRouter from "./routes/friendRoutes.js";
 import notificationRouter from "./routes/notificationRoutes.js";
 
-const app = express();
+const app: Express = express();
 
 // if (process.env.TRUST_PROXY) {
 //   app.set("trust proxy", Number(process.env.TRUST_PROXY));
 // }
 
-app.use((req, res, next) => {
+app.use((req: Request, res: Response, next: NextFunction) => {
   const start = Date.now();
   console.log(`--> ${req.method} ${req.originalUrl}`);
 
