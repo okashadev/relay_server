@@ -4,19 +4,10 @@ import { AuthenticatedRequest } from "../middlewares/authMiddleware.js";
 import { notificationsQuerySchema } from "../validators/notificationValidator.js";
 import { db } from "../config/db.js";
 import { notificationSelect } from "../lib/notificationSelect.js";
-
-const unauthorized = (res: Response) =>
-  res.status(401).json({
-    success: false,
-    error: "Access denied. No token provided.",
-  });
-
-const serverError = (res: Response) =>
-  res.status(500).json({ success: false, error: "Something went wrong." });
+import { serverError, unauthorized } from "../utils/httpResponses.js";
 
 const visibleWhere = (userId: string): Prisma.NotificationWhereInput => ({
   userId,
-  OR: [{ friendshipId: null }, { friendship: { status: { not: "BLOCKED" } } }],
 });
 
 export const getNotifications = async (

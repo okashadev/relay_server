@@ -11,6 +11,9 @@ import {
   sendRequestSchema,
   suggestionsQuerySchema,
 } from "../validators/friendValidator.js";
+import { serverError, unauthorized } from "../utils/httpResponses.js";
+import { getUserId } from "../utils/getUserId.js";
+import { pairKey } from "../utils/pairKey.js";
 
 const SEARCH_LIMIT = 15;
 const MAX_FRIENDS = 500;
@@ -28,6 +31,7 @@ type PublicUser = {
 type UserWithRelationship = PublicUser & {
   relationship: Relationship;
   friendshipId: string | null;
+  isBlocked: boolean | null;
 };
 
 const publicUserSelect = {
@@ -42,17 +46,6 @@ const friendUserSelect = {
   ...publicUserSelect,
   status: true,
 } satisfies Prisma.UserSelect;
-
-const getUserId = (req: AuthenticatedRequest) => req.user?.userId;
-
-const unauthorized = (res: Response) =>
-  res.status(401).json({
-    success: false,
-    error: "Access denied. No token provided.",
-  });
-
-const serverError = (res: Response) =>
-  res.status(500).json({ success: false, error: "Something went wrong." });
 
 const notifyRelationship = (
   targetUserId: string,
@@ -74,15 +67,37 @@ const attachRelationships = async (
 
   const ids = users.map((user) => user.id);
 
-  const friendships = await db.friendship.findMany({
-    where: {
-      OR: [
-        { senderId: currentUserId, receiverId: { in: ids } },
-        { senderId: { in: ids }, receiverId: currentUserId },
-      ],
-    },
-    select: { id: true, senderId: true, receiverId: true, status: true },
-  });
+  const [friendships, blocks] = await Promise.all([
+    db.friendship.findMany({
+      where: {
+        OR: [
+          { senderId: currentUserId, receiverId: { in: ids } },
+          { senderId: { in: ids }, receiverId: currentUserId },
+        ],
+      },
+      select: { id: true, senderId: true, receiverId: true, status: true },
+    }),
+    db.block.findMany({
+      where: {
+        OR: [
+          { blockerId: currentUserId, blockedId: { in: ids } },
+          { blockerId: { in: ids }, blockedId: currentUserId },
+        ],
+      },
+      select: { blockerId: true, blockedId: true },
+    }),
+  ]);
+
+  const blockedByThemSet = new Set<string>();
+  const blockedByMeSet = new Set<string>();
+
+  for (const block of blocks) {
+    if (block.blockerId === currentUserId) {
+      blockedByMeSet.add(block.blockedId);
+    } else {
+      blockedByThemSet.add(block.blockerId);
+    }
+  }
 
   const byOtherUser = new Map<string, (typeof friendships)[number]>();
   for (const friendship of friendships) {
@@ -96,14 +111,20 @@ const attachRelationships = async (
   const result: UserWithRelationship[] = [];
 
   for (const user of users) {
+    if (blockedByThemSet.has(user.id)) continue;
+
     const friendship = byOtherUser.get(user.id);
+    const isBlocked = blockedByMeSet.has(user.id);
 
     if (!friendship) {
-      result.push({ ...user, relationship: "NONE", friendshipId: null });
+      result.push({
+        ...user,
+        relationship: "NONE",
+        friendshipId: null,
+        isBlocked,
+      });
       continue;
     }
-
-    if (friendship.status === "BLOCKED") continue;
 
     const relationship: Relationship =
       friendship.status === "ACCEPTED"
@@ -112,7 +133,12 @@ const attachRelationships = async (
           ? "REQUEST_SENT"
           : "REQUEST_RECEIVED";
 
-    result.push({ ...user, relationship, friendshipId: friendship.id });
+    result.push({
+      ...user,
+      relationship,
+      friendshipId: friendship.id,
+      isBlocked,
+    });
   }
 
   return result;
@@ -147,6 +173,12 @@ export const getSuggestions = async (
           FROM "Friendship" f
           WHERE (f."senderId" = ${userId} AND f."receiverId" = u."id")
              OR (f."receiverId" = ${userId} AND f."senderId" = u."id")
+        )
+        AND NOT EXISTS (
+          SELECT 1
+          FROM "Block" b
+          WHERE (b."blockerId" = ${userId} AND b."blockedId" = u."id")
+             OR (b."blockerId" = u."id" AND b."blockedId" = ${userId})
         )
       ORDER BY RANDOM()
       LIMIT ${limit}
@@ -235,7 +267,7 @@ export const sendFriendRequest = async (
       });
     }
 
-    const [receiver, existing] = await Promise.all([
+    const [receiver, existing, isBlocked] = await Promise.all([
       db.user.findFirst({
         where: { id: receiverId, isEmailVerified: true },
         select: { id: true },
@@ -249,9 +281,17 @@ export const sendFriendRequest = async (
         },
         select: { id: true, senderId: true, status: true },
       }),
+      db.block.findFirst({
+        where: {
+          OR: [
+            { blockerId: senderId, blockedId: receiverId },
+            { blockerId: receiverId, blockedId: senderId },
+          ],
+        },
+      }),
     ]);
 
-    if (!receiver || existing?.status === "BLOCKED") {
+    if (!receiver || isBlocked) {
       return res.status(404).json({
         success: false,
         error: "User not found.",
@@ -316,7 +356,11 @@ export const sendFriendRequest = async (
 
     const created = await db.$transaction(async (tx) => {
       const friendship = await tx.friendship.create({
-        data: { senderId, receiverId },
+        data: {
+          senderId,
+          receiverId,
+          pairKey: pairKey(senderId, receiverId),
+        },
         select: { id: true },
       });
 
@@ -455,7 +499,7 @@ export const acceptFriendRequest = async (
       select: { id: true, senderId: true, status: true },
     });
 
-    if (!friendship || friendship.status === "BLOCKED") {
+    if (!friendship) {
       return res.status(404).json({
         success: false,
         error: "Friend request not found.",
@@ -518,7 +562,11 @@ export const acceptFriendRequest = async (
       });
     }
 
-    emitToUser(friendship.senderId, SOCKET_EVENTS.NOTIFICATION_NEW, notification);
+    emitToUser(
+      friendship.senderId,
+      SOCKET_EVENTS.NOTIFICATION_NEW,
+      notification,
+    );
     notifyRelationship(friendship.senderId, userId, "FRIENDS", id);
 
     return res.status(200).json({
