@@ -16,7 +16,7 @@ export const unauthorized = (
   error = "Access denied. No token provided.",
 ) => sendError(res, 401, error);
 
-export const notFound = (res: Response, error = "Not found.") =>
+export const notFound = (res: Response, error: string) =>
   sendError(res, 404, error);
 
 export const serverError = (res: Response) =>
@@ -24,3 +24,6 @@ export const serverError = (res: Response) =>
 
 export const validationError = (res: Response, error: ZodError) =>
   badRequest(res, error.issues[0]?.message ?? "Invalid input.");
+
+export const forbidden = (res: Response, error = "Forbidden.") =>
+  sendError(res, 403, error);

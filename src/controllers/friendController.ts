@@ -11,7 +11,13 @@ import {
   sendRequestSchema,
   suggestionsQuerySchema,
 } from "../validators/friendValidator.js";
-import { serverError, unauthorized } from "../utils/httpResponses.js";
+import {
+  badRequest,
+  notFound,
+  serverError,
+  unauthorized,
+  validationError,
+} from "../utils/httpResponses.js";
 import { getUserId } from "../utils/getUserId.js";
 import { pairKey } from "../utils/pairKey.js";
 
@@ -155,10 +161,7 @@ export const getSuggestions = async (
     const queryResult = suggestionsQuerySchema.safeParse(req.query);
 
     if (!queryResult.success) {
-      return res.status(400).json({
-        success: false,
-        error: queryResult.error.issues[0].message,
-      });
+      return validationError(res, queryResult.error);
     }
 
     const { limit } = queryResult.data;
@@ -208,10 +211,7 @@ export const searchUser = async (req: AuthenticatedRequest, res: Response) => {
     const validationResult = searchQuerySchema.safeParse(req.query);
 
     if (!validationResult.success) {
-      return res.status(400).json({
-        success: false,
-        error: validationResult.error.issues[0].message,
-      });
+      return validationError(res, validationResult.error);
     }
 
     const { q } = validationResult.data;
@@ -251,21 +251,13 @@ export const sendFriendRequest = async (
 
     const validationResult = sendRequestSchema.safeParse(req.body);
 
-    if (!validationResult.success) {
-      return res.status(400).json({
-        success: false,
-        error: validationResult.error.issues[0].message,
-      });
-    }
+    if (!validationResult.success)
+      return validationError(res, validationResult.error);
 
     const { receiverId } = validationResult.data;
 
-    if (senderId === receiverId) {
-      return res.status(400).json({
-        success: false,
-        error: "You cannot send a friend request to yourself.",
-      });
-    }
+    if (senderId === receiverId)
+      return badRequest(res, "You cannot send a friend request to yourself.");
 
     const [receiver, existing, isBlocked] = await Promise.all([
       db.user.findFirst({
@@ -292,10 +284,7 @@ export const sendFriendRequest = async (
     ]);
 
     if (!receiver || isBlocked) {
-      return res.status(404).json({
-        success: false,
-        error: "User not found.",
-      });
+      return notFound(res, "User not found.");
     }
 
     if (existing) {
@@ -419,10 +408,7 @@ export const cancelFriendRequest = async (
     const paramsResult = requestIdParamSchema.safeParse(req.params);
 
     if (!paramsResult.success) {
-      return res.status(400).json({
-        success: false,
-        error: paramsResult.error.issues[0].message,
-      });
+      return validationError(res, paramsResult.error);
     }
 
     const { id } = paramsResult.data;
@@ -486,10 +472,7 @@ export const acceptFriendRequest = async (
     const paramsResult = requestIdParamSchema.safeParse(req.params);
 
     if (!paramsResult.success) {
-      return res.status(400).json({
-        success: false,
-        error: paramsResult.error.issues[0].message,
-      });
+      return validationError(res, paramsResult.error);
     }
 
     const { id } = paramsResult.data;
@@ -500,10 +483,7 @@ export const acceptFriendRequest = async (
     });
 
     if (!friendship) {
-      return res.status(404).json({
-        success: false,
-        error: "Friend request not found.",
-      });
+      return notFound(res, "Friend request not found.");
     }
 
     if (friendship.status === "ACCEPTED") {
@@ -556,10 +536,7 @@ export const acceptFriendRequest = async (
         });
       }
 
-      return res.status(404).json({
-        success: false,
-        error: "Friend request not found.",
-      });
+      return notFound(res, "Friend request not found.");
     }
 
     emitToUser(
@@ -592,10 +569,7 @@ export const rejectFriendRequest = async (
     const paramsResult = requestIdParamSchema.safeParse(req.params);
 
     if (!paramsResult.success) {
-      return res.status(400).json({
-        success: false,
-        error: paramsResult.error.issues[0].message,
-      });
+      return validationError(res, paramsResult.error);
     }
 
     const { id } = paramsResult.data;
