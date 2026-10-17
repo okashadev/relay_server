@@ -15,7 +15,14 @@ const authError = (code: string) => {
   return error;
 };
 
-export const initSocketServer = (httpServer: HttpServer): Server => {
+type SocketServerOptions = {
+  onConnect?: (userId: string) => void;
+};
+
+export const initSocketServer = (
+  httpServer: HttpServer,
+  options: SocketServerOptions = {},
+): Server => {
   const secret = process.env.JWT_SECRET;
   if (!secret) throw new Error("JWT_SECRET is not defined");
 
@@ -44,7 +51,7 @@ export const initSocketServer = (httpServer: HttpServer): Server => {
 
       socket.data.userId = decoded.userId;
       return next();
-    } catch (error: any) {
+    } catch (error) {
       return next(
         authError(
           error instanceof jwt.TokenExpiredError
@@ -59,6 +66,7 @@ export const initSocketServer = (httpServer: HttpServer): Server => {
     const userId = socket.data.userId as string;
 
     socket.join(userRoom(userId));
+    options.onConnect?.(userId);
 
     if (process.env.NODE_ENV !== "production") {
       console.log(`[socket] connected ${userId} (${socket.id})`);
@@ -74,8 +82,29 @@ export const initSocketServer = (httpServer: HttpServer): Server => {
 export const emitToUser = (userId: string, event: string, payload: unknown) => {
   try {
     io?.to(userRoom(userId)).emit(event, payload);
-  } catch (error: any) {
+  } catch (error) {
     console.error("Socket emit failed:", error);
+  }
+};
+
+export const emitToUserWithAck = async (
+  userId: string,
+  event: string,
+  payload: unknown,
+  timeoutMs = 4_000,
+): Promise<boolean> => {
+  if (!io) return false;
+
+  try {
+    const responses = await io
+      .to(userRoom(userId))
+      .timeout(timeoutMs)
+      .emitWithAck(event, payload);
+
+    return responses.length > 0;
+  } catch (error) {
+    const responses = (error as { responses?: unknown[] }).responses;
+    return Array.isArray(responses) && responses.length > 0;
   }
 };
 

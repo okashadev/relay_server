@@ -12,6 +12,7 @@ import cookieParser from "cookie-parser";
 import friendRouter from "./routes/friendRoutes.js";
 import notificationRouter from "./routes/notificationRoutes.js";
 import conversationRouter from "./routes/ConversationRoutes.js";
+import uploadRouter from "./routes/uploadRoutes.js";
 
 const app: Express = express();
 
@@ -44,7 +45,7 @@ app.use(
     credentials: true,
   }),
 );
-app.use(express.json({ limit: "10kb" }));
+app.use(express.json({ limit: "32kb" }));
 app.use(cookieParser());
 
 app.get("/api/health", (_req, res) => {
@@ -55,6 +56,7 @@ app.use("/api/auth", authRouter);
 app.use("/api/friends", friendRouter);
 app.use("/api/notifications", notificationRouter);
 app.use("/api/conversation", conversationRouter);
+app.use("/api/uploads", uploadRouter);
 
 app.use((_req, res) => {
   res.status(404).json({ success: false, error: "Route not found." });

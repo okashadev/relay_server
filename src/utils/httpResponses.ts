@@ -27,3 +27,6 @@ export const validationError = (res: Response, error: ZodError) =>
 
 export const forbidden = (res: Response, error = "Forbidden.") =>
   sendError(res, 403, error);
+
+export const conflict = (res: Response, error = "Conflict.") =>
+  sendError(res, 409, error);

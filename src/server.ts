@@ -3,6 +3,7 @@ import { disconnectDb } from "./config/db.js";
 import app from "./app.js";
 import { createServer } from "node:http";
 import { closeSocketServer, initSocketServer } from "./socket/socketServer.js";
+import { deliverPendingOnConnect } from "./utils/receipts.js";
 
 const requiredEnv = [
   "JWT_SECRET",
@@ -23,7 +24,9 @@ for (const key of requiredEnv) {
 const PORT = Number(process.env.PORT) || 5000;
 
 const httpServer = createServer(app);
-initSocketServer(httpServer);
+initSocketServer(httpServer, {
+  onConnect: (userId) => void deliverPendingOnConnect(userId),
+});
 
 httpServer.keepAliveTimeout = 65_000;
 httpServer.headersTimeout = 66_000;

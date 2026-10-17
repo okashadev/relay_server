@@ -3,21 +3,37 @@ import { AuthenticatedRequest } from "../middlewares/authMiddleware.js";
 import { getUserId } from "../utils/getUserId.js";
 import {
   badRequest,
+  conflict,
   forbidden,
   notFound,
   serverError,
   unauthorized,
   validationError,
 } from "../utils/httpResponses.js";
-import { newChatSchema } from "../validators/directChatValidator.js";
 import { db } from "../config/db.js";
 import { ConversationType, MessageType, Prisma } from "@prisma/client";
 import { pairKey } from "../utils/pairKey.js";
 import {
   conversationIdParamSchema,
   messagesQuerySchema,
+  newChatSchema,
+  sendMessageSchema,
 } from "../validators/chatValidator.js";
 import { decodeCursor, encodeCursor } from "../utils/cursor.js";
+import {
+  MessageRow,
+  messageSelect,
+  serializeMessage,
+} from "../utils/messages.js";
+import {
+  isOwnPublicId,
+  sanitizeFileName,
+  VerifiedMedia,
+  verifyChatMedia,
+} from "../utils/chatMedia.js";
+import { broadcastNewMessage } from "../utils/messageEvents.js";
+import { getReceipts, markRead, publishReceipts } from "../utils/receipts.js";
+import { chatSettingsSchema } from "../validators/chatValidator.js";
 
 const otherUserSelect = {
   id: true,
@@ -83,40 +99,6 @@ const toConversationResponse = (
   };
 };
 
-const messageSenderSelect = {
-  id: true,
-  name: true,
-  username: true,
-  avatar: true,
-} satisfies Prisma.UserSelect;
-
-const messageSelect = {
-  id: true,
-  clientId: true,
-  senderId: true,
-  sender: { select: messageSenderSelect },
-  conversationId: true,
-  type: true,
-  content: true,
-  mediaUrl: true,
-  fileName: true,
-  mediaSize: true,
-  mediaWidth: true,
-  mediaHeight: true,
-  replyTo: {
-    select: {
-      id: true,
-      content: true,
-      createdAt: true,
-      deletedAt: true,
-      sender: { select: { name: true } },
-    },
-  },
-  editedAt: true,
-  deletedAt: true,
-  createdAt: true,
-} satisfies Prisma.MessageSelect;
-
 const MAX_MEMBERS = 500;
 
 const DELETED_USER: OtherUser = {
@@ -151,8 +133,16 @@ type LastMessageRow = {
   createdAt: Date;
   unreadCount: number;
 };
+
 const truncate = (text: string | null) =>
   text ? Array.from(text).slice(0, PREVIEW_LENGTH).join("") : null;
+
+const MAX_PINNED_CHATS = 3;
+const MUTE_FOREVER = new Date("9999-12-31T23:59:59.000Z");
+const MUTE_DURATIONS_MS = {
+  "8h": 8 * 60 * 60 * 1000,
+  "1w": 7 * 24 * 60 * 60 * 1000,
+} as const;
 
 export const newChat = async (req: AuthenticatedRequest, res: Response) => {
   try {
@@ -313,41 +303,7 @@ export const getMessages = async (req: AuthenticatedRequest, res: Response) => {
     const oldest = page[page.length - 1];
 
     const items = page
-      .map((message) => {
-        const isDeleted = message.deletedAt !== null;
-        const reply = message.replyTo;
-
-        const hideReplyContent =
-          reply !== null &&
-          (reply.deletedAt !== null ||
-            (clearedAt !== null && reply.createdAt <= clearedAt));
-
-        return {
-          id: message.id,
-          clientId: message.senderId === userId ? message.clientId : null,
-          senderId: message.senderId,
-          conversationId: message.conversationId,
-          sender: message.sender,
-          type: message.type,
-          content: isDeleted ? null : message.content,
-          mediaUrl: isDeleted ? null : message.mediaUrl,
-          fileName: isDeleted ? null : message.fileName,
-          mediaSize: isDeleted ? null : message.mediaSize,
-          mediaWidth: isDeleted ? null : message.mediaWidth,
-          mediaHeight: isDeleted ? null : message.mediaHeight,
-          replyTo:
-            reply && !isDeleted
-              ? {
-                  id: reply.id,
-                  content: hideReplyContent ? null : reply.content,
-                  senderName: reply.sender?.name ?? null,
-                }
-              : null,
-          editedAt: message.editedAt,
-          deletedAt: message.deletedAt,
-          createdAt: message.createdAt,
-        };
-      })
+      .map((message) => serializeMessage(message, userId, clearedAt))
       .reverse();
 
     res.set("Cache-Control", "no-store");
@@ -377,7 +333,7 @@ export const getConversation = async (
 
     const { id } = paramResult.data;
 
-    const [conversation, mine] = await Promise.all([
+    const [conversation, mine, receipts] = await Promise.all([
       db.conversation.findUnique({
         where: {
           id,
@@ -413,6 +369,7 @@ export const getConversation = async (
           isArchived: true,
         },
       }),
+      getReceipts(id),
     ]);
 
     if (!conversation || !mine) return notFound(res, "Conversation not found.");
@@ -442,6 +399,7 @@ export const getConversation = async (
             role,
           })),
           me,
+          receipts,
         },
       });
     }
@@ -475,6 +433,7 @@ export const getConversation = async (
         createdAt: conversation.createdAt,
         otherUser,
         me,
+        receipts,
       },
     });
   } catch (error: any) {
@@ -673,21 +632,305 @@ export const markConversationRead = async (
     if (!userId) return unauthorized(res);
 
     const paramsResult = conversationIdParamSchema.safeParse(req.params);
-    if (!paramsResult.success) return validationError(res, paramsResult.error);
+    if (!paramsResult.success) {
+      return validationError(res, paramsResult.error);
+    }
 
     const { id: conversationId } = paramsResult.data;
-    const now = new Date();
 
-    const updated = await db.conversationParticipant.updateMany({
-      where: { conversationId, userId },
-      data: { lastReadAt: now, lastDeliveredAt: now },
-    });
+    const changed = await markRead(conversationId, userId);
 
-    if (updated.count === 0) return notFound(res, "Conversation not found.");
+    if (!changed) {
+      const participant = await db.conversationParticipant.findUnique({
+        where: { conversationId_userId: { conversationId, userId } },
+        select: { id: true },
+      });
 
-    return res.status(200).json({ success: true, lastReadAt: now });
+      if (!participant) return notFound(res, "Conversation not found.");
+
+      return res.status(200).json({ success: true });
+    }
+
+    res.status(200).json({ success: true });
+
+    void publishReceipts([conversationId]);
   } catch (error: any) {
     console.error("Mark Read Error:", error);
+    return serverError(res);
+  }
+};
+
+export const sendMessage = async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const userId = getUserId(req);
+    if (!userId) return unauthorized(res);
+
+    const paramsResult = conversationIdParamSchema.safeParse(req.params);
+    if (!paramsResult.success) {
+      return validationError(res, paramsResult.error);
+    }
+
+    const bodyResult = sendMessageSchema.safeParse(req.body);
+    if (!bodyResult.success) {
+      return validationError(res, bodyResult.error);
+    }
+
+    const { id: conversationId } = paramsResult.data;
+    const input = bodyResult.data;
+
+    const participant = await db.conversationParticipant.findUnique({
+      where: { conversationId_userId: { conversationId, userId } },
+      select: {
+        leftAt: true,
+        clearedAt: true,
+        conversation: { select: { type: true, directKey: true } },
+      },
+    });
+
+    if (!participant) return notFound(res, "Conversation not found.");
+
+    if (participant.leftAt) {
+      return forbidden(res, "You are no longer a member of this conversation.");
+    }
+
+    const isDirect = participant.conversation.type === "DIRECT";
+    const otherUserId = isDirect
+      ? participant.conversation.directKey
+          ?.split(":")
+          .find((id) => id !== userId)
+      : undefined;
+
+    const [existing, reply, directState] = await Promise.all([
+      db.message.findFirst({
+        where: { senderId: userId, clientId: input.clientId },
+        select: { ...messageSelect, conversationId: true },
+      }),
+      input.replyToId
+        ? db.message.findFirst({
+            where: {
+              id: input.replyToId,
+              conversationId,
+              deletedAt: null,
+              deletions: { none: { userId } },
+              ...(participant.clearedAt
+                ? { createdAt: { gt: participant.clearedAt } }
+                : {}),
+            },
+            select: { id: true },
+          })
+        : Promise.resolve(null),
+      otherUserId
+        ? Promise.all([
+            db.conversationParticipant.findUnique({
+              where: {
+                conversationId_userId: { conversationId, userId: otherUserId },
+              },
+              select: { id: true },
+            }),
+            db.block.findFirst({
+              where: {
+                OR: [
+                  { blockerId: userId, blockedId: otherUserId },
+                  { blockerId: otherUserId, blockedId: userId },
+                ],
+              },
+              select: { id: true },
+            }),
+          ])
+        : Promise.resolve(null),
+    ]);
+
+    if (existing) {
+      if (existing.conversationId !== conversationId) {
+        return conflict(res, "This client id was already used.");
+      }
+
+      return res.status(200).json({
+        success: true,
+        message: serializeMessage(existing, userId, participant.clearedAt),
+      });
+    }
+
+    if (isDirect) {
+      const [otherParticipant, block] = directState ?? [null, null];
+
+      if (!otherParticipant || block) {
+        return forbidden(res, "You can't send messages in this conversation.");
+      }
+    }
+
+    if (input.replyToId && !reply) {
+      return badRequest(
+        res,
+        "The message you're replying to is no longer available.",
+      );
+    }
+
+    let media: VerifiedMedia | null = null;
+
+    if (input.type !== "TEXT") {
+      if (!isOwnPublicId(input.publicId, userId, input.type)) {
+        return badRequest(res, "Invalid media reference.");
+      }
+
+      const check = await verifyChatMedia(input.type, input.publicId);
+
+      if (!check.ok) {
+        return res
+          .status(check.status)
+          .json({ success: false, error: check.error });
+      }
+
+      media = check.media;
+    }
+
+    const data: Prisma.MessageUncheckedCreateInput = {
+      conversationId,
+      senderId: userId,
+      clientId: input.clientId,
+      type: input.type,
+      content: input.type === "VOICE" ? null : input.content || null,
+      replyToId: input.replyToId ?? null,
+      fileName: input.type === "FILE" ? sanitizeFileName(input.fileName) : null,
+      ...(media && {
+        mediaUrl: media.url,
+        thumbnailUrl: media.thumbnailUrl,
+        mediaMimeType: media.mimeType,
+        mediaSize: media.size,
+        mediaWidth: media.width,
+        mediaHeight: media.height,
+        mediaDuration: media.duration,
+      }),
+    };
+
+    let message: MessageRow;
+
+    try {
+      message = await db.$transaction(async (tx) => {
+        const created = await tx.message.create({
+          data,
+          select: messageSelect,
+        });
+
+        await tx.conversation.updateMany({
+          where: {
+            id: conversationId,
+            lastMessageAt: { lt: created.createdAt },
+          },
+          data: { lastMessageAt: created.createdAt },
+        });
+
+        await tx.$executeRaw`
+          UPDATE "ConversationParticipant" cp
+          SET "lastReadAt" = m."createdAt", "lastDeliveredAt" = m."createdAt"
+          FROM "Message" m
+          WHERE m."id" = ${created.id}
+            AND cp."conversationId" = m."conversationId"
+            AND cp."userId" = ${userId}
+            AND (cp."lastReadAt" IS NULL OR cp."lastReadAt" < m."createdAt")
+        `;
+
+        return created;
+      });
+    } catch (error: any) {
+      if (error?.code !== "P2002") throw error;
+
+      const winner = await db.message.findFirst({
+        where: { senderId: userId, clientId: input.clientId },
+        select: { ...messageSelect, conversationId: true },
+      });
+
+      if (!winner || winner.conversationId !== conversationId) {
+        return conflict(res, "This client id was already used.");
+      }
+
+      return res.status(200).json({
+        success: true,
+        message: serializeMessage(winner, userId, participant.clearedAt),
+      });
+    }
+
+    res.status(201).json({
+      success: true,
+      message: serializeMessage(message, userId, participant.clearedAt),
+    });
+
+    void broadcastNewMessage(message, conversationId, userId);
+  } catch (error: any) {
+    console.error("Send Message Error:", error);
+    return serverError(res);
+  }
+};
+
+export const updateChatSettings = async (
+  req: AuthenticatedRequest,
+  res: Response,
+) => {
+  try {
+    const userId = getUserId(req);
+    if (!userId) return unauthorized(res);
+
+    const paramsResult = conversationIdParamSchema.safeParse(req.params);
+    if (!paramsResult.success) {
+      return validationError(res, paramsResult.error);
+    }
+
+    const bodyResult = chatSettingsSchema.safeParse(req.body);
+    if (!bodyResult.success) return validationError(res, bodyResult.error);
+
+    const { id: conversationId } = paramsResult.data;
+    const { pinned, archived, mute } = bodyResult.data;
+
+    const participant = await db.conversationParticipant.findUnique({
+      where: { conversationId_userId: { conversationId, userId } },
+      select: { id: true, pinnedAt: true },
+    });
+
+    if (!participant) return notFound(res, "Conversation not found.");
+
+    const data: Prisma.ConversationParticipantUpdateInput = {};
+
+    if (pinned !== undefined) {
+      if (pinned && !participant.pinnedAt) {
+        const pinnedCount = await db.conversationParticipant.count({
+          where: { userId, pinnedAt: { not: null } },
+        });
+
+        if (pinnedCount >= MAX_PINNED_CHATS) {
+          return badRequest(res, `You can pin up to ${MAX_PINNED_CHATS} chats.`);
+        }
+      }
+
+      data.pinnedAt = pinned ? (participant.pinnedAt ?? new Date()) : null;
+    }
+
+    if (archived !== undefined) data.isArchived = archived;
+
+    if (mute !== undefined) {
+      data.mutedUntil =
+        mute === null
+          ? null
+          : mute === "forever"
+            ? MUTE_FOREVER
+            : new Date(Date.now() + MUTE_DURATIONS_MS[mute]);
+    }
+
+    const updated = await db.conversationParticipant.update({
+      where: { id: participant.id },
+      data,
+      select: { mutedUntil: true, pinnedAt: true, isArchived: true },
+    });
+
+    return res.status(200).json({
+      success: true,
+      me: {
+        isMuted: Boolean(updated.mutedUntil && updated.mutedUntil > new Date()),
+        isPinned: updated.pinnedAt !== null,
+        isArchived: updated.isArchived,
+      },
+    });
+  } catch (error: any) {
+    console.error("Update Chat Settings Error:", error);
     return serverError(res);
   }
 };
