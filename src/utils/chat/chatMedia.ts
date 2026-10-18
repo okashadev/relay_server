@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { extname } from "node:path";
-import cloudinary from "../config/cloudinary.js";
+import cloudinary from "../../config/cloudinary.js";
 
 export type MediaKind = "IMAGE" | "VIDEO" | "VOICE" | "FILE";
 type ResourceType = "image" | "video" | "raw";

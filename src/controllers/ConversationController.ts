@@ -1,6 +1,14 @@
 import { Response } from "express";
-import { AuthenticatedRequest } from "../middlewares/authMiddleware.js";
+import { db } from "../config/db.js";
+import { Prisma } from "@prisma/client";
+import { pairKey } from "../utils/pairKey.js";
 import { getUserId } from "../utils/getUserId.js";
+import { decodeCursor, encodeCursor } from "../utils/cursor.js";
+import { chatSettingsSchema } from "../validators/chatValidator.js";
+import { broadcastNewMessage } from "../utils/chat/messageEvents.js";
+import { AuthenticatedRequest } from "../middlewares/authMiddleware.js";
+import { LastMessageRow, OtherUser } from "../types/conversationTypes.js";
+import { toConversationResponse, truncate } from "../utils/chat/chatHelpers.js";
 import {
   badRequest,
   conflict,
@@ -10,139 +18,40 @@ import {
   unauthorized,
   validationError,
 } from "../utils/httpResponses.js";
-import { db } from "../config/db.js";
-import { ConversationType, MessageType, Prisma } from "@prisma/client";
-import { pairKey } from "../utils/pairKey.js";
 import {
   conversationIdParamSchema,
   messagesQuerySchema,
   newChatSchema,
   sendMessageSchema,
 } from "../validators/chatValidator.js";
-import { decodeCursor, encodeCursor } from "../utils/cursor.js";
 import {
   MessageRow,
   messageSelect,
   serializeMessage,
-} from "../utils/messages.js";
+} from "../utils/chat/messages.js";
 import {
   isOwnPublicId,
   sanitizeFileName,
   VerifiedMedia,
   verifyChatMedia,
-} from "../utils/chatMedia.js";
-import { broadcastNewMessage } from "../utils/messageEvents.js";
-import { getReceipts, markRead, publishReceipts } from "../utils/receipts.js";
-import { chatSettingsSchema } from "../validators/chatValidator.js";
-
-const otherUserSelect = {
-  id: true,
-  name: true,
-  username: true,
-  avatar: true,
-  bio: true,
-  status: true,
-  lastSeen: true,
-} satisfies Prisma.UserSelect;
-
-const conversationSelect = (userId: string) =>
-  ({
-    id: true,
-    type: true,
-    lastMessageAt: true,
-    createdAt: true,
-    participants: {
-      where: { userId },
-      select: { mutedUntil: true, pinnedAt: true, isArchived: true },
-    },
-  }) satisfies Prisma.ConversationSelect;
-
-type ConversationRow = {
-  id: string;
-  type: ConversationType;
-  lastMessageAt: Date;
-  createdAt: Date;
-  participants: {
-    mutedUntil: Date | null;
-    pinnedAt: Date | null;
-    isArchived: boolean;
-  }[];
-};
-
-type OtherUser = {
-  id: string;
-  name: string;
-  username: string;
-  avatar: string | null;
-  bio: string | null;
-  status: "ONLINE" | "OFFLINE";
-  lastSeen: Date | null;
-};
-
-const toConversationResponse = (
-  conversation: ConversationRow,
-  otherUser: OtherUser,
-) => {
-  const mine = conversation.participants[0];
-
-  return {
-    id: conversation.id,
-    type: conversation.type,
-    lastMessageAt: conversation.lastMessageAt,
-    createdAt: conversation.createdAt,
-    otherUser,
-    me: {
-      isMuted: Boolean(mine?.mutedUntil && mine.mutedUntil > new Date()),
-      isPinned: Boolean(mine?.pinnedAt),
-      isArchived: mine?.isArchived ?? false,
-    },
-  };
-};
-
-const MAX_MEMBERS = 500;
-
-const DELETED_USER: OtherUser = {
-  id: "deleted",
-  name: "Deleted user",
-  username: "deleted",
-  avatar: null,
-  bio: null,
-  status: "OFFLINE",
-  lastSeen: null,
-};
-
-const MAX_CHATS = 100;
-const PREVIEW_LENGTH = 120;
-const UNREAD_CAP = 100;
-
-const listUserSelect = {
-  id: true,
-  name: true,
-  avatar: true,
-  status: true,
-} satisfies Prisma.UserSelect;
-
-type LastMessageRow = {
-  conversationId: string;
-  type: MessageType;
-  content: string | null;
-  fileName: string | null;
-  senderId: string | null;
-  senderName: string | null;
-  deletedAt: Date | null;
-  createdAt: Date;
-  unreadCount: number;
-};
-
-const truncate = (text: string | null) =>
-  text ? Array.from(text).slice(0, PREVIEW_LENGTH).join("") : null;
-
-const MAX_PINNED_CHATS = 3;
-const MUTE_FOREVER = new Date("9999-12-31T23:59:59.000Z");
-const MUTE_DURATIONS_MS = {
-  "8h": 8 * 60 * 60 * 1000,
-  "1w": 7 * 24 * 60 * 60 * 1000,
-} as const;
+} from "../utils/chat/chatMedia.js";
+import {
+  getReceipts,
+  markRead,
+  publishReceipts,
+} from "../utils/chat/receipts.js";
+import {
+  conversationSelect,
+  DELETED_USER,
+  listUserSelect,
+  MAX_CHATS,
+  MAX_MEMBERS,
+  MAX_PINNED_CHATS,
+  MUTE_DURATIONS_MS,
+  MUTE_FOREVER,
+  otherUserSelect,
+  UNREAD_CAP,
+} from "../utils/chat/chatConstants.js";
 
 export const newChat = async (req: AuthenticatedRequest, res: Response) => {
   try {
@@ -897,7 +806,10 @@ export const updateChatSettings = async (
         });
 
         if (pinnedCount >= MAX_PINNED_CHATS) {
-          return badRequest(res, `You can pin up to ${MAX_PINNED_CHATS} chats.`);
+          return badRequest(
+            res,
+            `You can pin up to ${MAX_PINNED_CHATS} chats.`,
+          );
         }
       }
 

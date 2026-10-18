@@ -5,4 +5,7 @@ export const SOCKET_EVENTS = {
   MESSAGE_UPDATED: "message:updated",
   MESSAGE_REMOVED: "message:removed",
   RECEIPTS_UPDATED: "receipts:updated",
+  TYPING_START: "typing:start",
+  TYPING_STOP: "typing:stop",
+  TYPING_UPDATE: "typing:update",
 } as const;

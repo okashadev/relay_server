@@ -8,7 +8,7 @@ import {
   extensionOf,
   formatFromMime,
   newChatPublicId,
-} from "../utils/chatMedia.js";
+} from "../utils/chat/chatMedia.js";
 import {
   badRequest,
   serverError,

@@ -1,7 +1,7 @@
 import { Prisma } from "@prisma/client";
-import { db } from "../config/db.js";
-import { emitToUser } from "../socket/socketServer.js";
-import { SOCKET_EVENTS } from "../socket/events.js";
+import { db } from "../../config/db.js";
+import { emitToUser } from "../../socket/socketServer.js";
+import { SOCKET_EVENTS } from "../../socket/events.js";
 
 export type Receipts = { deliveredUpTo: Date | null; readUpTo: Date | null };
 
@@ -68,7 +68,10 @@ export const publishReceipts = async (conversationIds: string[]) => {
   }
 };
 
-export const markDelivered = async (conversationId: string, userIds: string[]) => {
+export const markDelivered = async (
+  conversationId: string,
+  userIds: string[],
+) => {
   if (userIds.length === 0) return;
 
   await db.$executeRaw`

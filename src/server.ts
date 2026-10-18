@@ -3,7 +3,7 @@ import { disconnectDb } from "./config/db.js";
 import app from "./app.js";
 import { createServer } from "node:http";
 import { closeSocketServer, initSocketServer } from "./socket/socketServer.js";
-import { deliverPendingOnConnect } from "./utils/receipts.js";
+import { deliverPendingOnConnect } from "./utils/chat/receipts.js";
 
 const requiredEnv = [
   "JWT_SECRET",

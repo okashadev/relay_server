@@ -9,10 +9,10 @@ import {
   messageParamsSchema,
   reactionSchema,
 } from "../validators/chatValidator.js";
-import { getChatAccess, type ChatAccess } from "../utils/chatAccess.js";
-import { deleteChatMedia } from "../utils/chatMedia.js";
-import { broadcastMessageUpdated } from "../utils/messageEvents.js";
-import { messageSelect, serializeMessage } from "../utils/messages.js";
+import { getChatAccess } from "../utils/chat/chatAccess.js";
+import { deleteChatMedia } from "../utils/chat/chatMedia.js";
+import { broadcastMessageUpdated } from "../utils/chat/messageEvents.js";
+import { messageSelect, serializeMessage } from "../utils/chat/messages.js";
 import {
   badRequest,
   forbidden,
@@ -21,15 +21,13 @@ import {
   unauthorized,
   validationError,
 } from "../utils/httpResponses.js";
-
-const EDIT_WINDOW_MS = 15 * 60 * 1000;
-const DELETE_EVERYONE_WINDOW_MS = 48 * 60 * 60 * 1000;
-const EDITABLE_TYPES = new Set<string>(["TEXT", "IMAGE", "VIDEO", "FILE"]);
-
-const getUserId = (req: AuthenticatedRequest) => req.user?.userId;
-
-const denyAccess = (res: Response, access: Extract<ChatAccess, { ok: false }>) =>
-  res.status(access.status).json({ success: false, error: access.error });
+import { getUserId } from "../utils/getUserId.js";
+import {
+  DELETE_EVERYONE_WINDOW_MS,
+  EDIT_WINDOW_MS,
+  EDITABLE_TYPES,
+} from "../utils/chat/chatConstants.js";
+import { denyAccess } from "../utils/chat/chatHelpers.js";
 
 export const editMessage = async (req: AuthenticatedRequest, res: Response) => {
   try {
@@ -101,7 +99,11 @@ export const editMessage = async (req: AuthenticatedRequest, res: Response) => {
   }
 };
 
-const cleanupMedia = async (url: string, ownerId: string, messageId: string) => {
+const cleanupMedia = async (
+  url: string,
+  ownerId: string,
+  messageId: string,
+) => {
   try {
     const stillUsed = await db.message.count({
       where: { mediaUrl: url, id: { not: messageId } },
@@ -159,7 +161,10 @@ export const deleteMessage = async (
     }
 
     if (message.senderId !== userId) {
-      return forbidden(res, "You can only delete your own messages for everyone.");
+      return forbidden(
+        res,
+        "You can only delete your own messages for everyone.",
+      );
     }
 
     if (message.deletedAt) {

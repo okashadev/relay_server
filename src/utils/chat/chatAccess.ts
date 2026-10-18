@@ -1,4 +1,4 @@
-import { db } from "../config/db.js";
+import { db } from "../../config/db.js";
 
 export type ChatAccess =
   | { ok: true; clearedAt: Date | null }

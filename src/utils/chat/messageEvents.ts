@@ -1,8 +1,8 @@
-import { db } from "../config/db.js";
-import { SOCKET_EVENTS } from "../socket/events.js";
-import { emitToUser, emitToUserWithAck } from "../socket/socketServer.js";
+import { db } from "../../config/db.js";
+import { SOCKET_EVENTS } from "../../socket/events.js";
+import { emitToUser, emitToUserWithAck } from "../../socket/socketServer.js";
 import { messageSelect, serializeMessage, type MessageRow } from "./messages.js";
-import { markDelivered, publishReceipts } from "./receipts.js";
+import { markDelivered, publishReceipts } from "../chat/receipts.js";
 
 export const broadcastNewMessage = async (
   message: MessageRow,

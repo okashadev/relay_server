@@ -1,5 +1,5 @@
 import { Prisma } from "@prisma/client";
-import { Response, Request } from "express";
+import { Response } from "express";
 import { AuthenticatedRequest } from "../middlewares/authMiddleware.js";
 import { notificationsQuerySchema } from "../validators/notificationValidator.js";
 import { db } from "../config/db.js";

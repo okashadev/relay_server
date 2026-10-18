@@ -1,8 +1,10 @@
 import { AuthenticatedRequest } from "../middlewares/authMiddleware.js";
 import { notificationSelect } from "../lib/notificationSelect.js";
 import { emitToUser } from "../socket/socketServer.js";
+import { PublicUser } from "../types/friendsTypes.js";
 import { SOCKET_EVENTS } from "../socket/events.js";
-import { Prisma } from "@prisma/client";
+import { getUserId } from "../utils/getUserId.js";
+import { pairKey } from "../utils/pairKey.js";
 import { db } from "../config/db.js";
 import { Response } from "express";
 import {
@@ -18,137 +20,16 @@ import {
   unauthorized,
   validationError,
 } from "../utils/httpResponses.js";
-import { getUserId } from "../utils/getUserId.js";
-import { pairKey } from "../utils/pairKey.js";
-
-const SEARCH_LIMIT = 15;
-const MAX_FRIENDS = 500;
-
-type Relationship = "NONE" | "REQUEST_SENT" | "REQUEST_RECEIVED" | "FRIENDS";
-
-type PublicUser = {
-  id: string;
-  name: string;
-  username: string;
-  avatar: string | null;
-  bio: string | null;
-};
-
-type UserWithRelationship = PublicUser & {
-  relationship: Relationship;
-  friendshipId: string | null;
-  isBlocked: boolean | null;
-};
-
-const publicUserSelect = {
-  id: true,
-  name: true,
-  username: true,
-  avatar: true,
-  bio: true,
-} satisfies Prisma.UserSelect;
-
-const friendUserSelect = {
-  ...publicUserSelect,
-  status: true,
-} satisfies Prisma.UserSelect;
-
-const notifyRelationship = (
-  targetUserId: string,
-  otherUserId: string,
-  relationship: Relationship,
-  friendshipId: string,
-) =>
-  emitToUser(targetUserId, SOCKET_EVENTS.FRIENDSHIP_UPDATED, {
-    userId: otherUserId,
-    relationship,
-    friendshipId,
-  });
-
-const attachRelationships = async (
-  currentUserId: string,
-  users: PublicUser[],
-): Promise<UserWithRelationship[]> => {
-  if (users.length === 0) return [];
-
-  const ids = users.map((user) => user.id);
-
-  const [friendships, blocks] = await Promise.all([
-    db.friendship.findMany({
-      where: {
-        OR: [
-          { senderId: currentUserId, receiverId: { in: ids } },
-          { senderId: { in: ids }, receiverId: currentUserId },
-        ],
-      },
-      select: { id: true, senderId: true, receiverId: true, status: true },
-    }),
-    db.block.findMany({
-      where: {
-        OR: [
-          { blockerId: currentUserId, blockedId: { in: ids } },
-          { blockerId: { in: ids }, blockedId: currentUserId },
-        ],
-      },
-      select: { blockerId: true, blockedId: true },
-    }),
-  ]);
-
-  const blockedByThemSet = new Set<string>();
-  const blockedByMeSet = new Set<string>();
-
-  for (const block of blocks) {
-    if (block.blockerId === currentUserId) {
-      blockedByMeSet.add(block.blockedId);
-    } else {
-      blockedByThemSet.add(block.blockerId);
-    }
-  }
-
-  const byOtherUser = new Map<string, (typeof friendships)[number]>();
-  for (const friendship of friendships) {
-    const otherId =
-      friendship.senderId === currentUserId
-        ? friendship.receiverId
-        : friendship.senderId;
-    byOtherUser.set(otherId, friendship);
-  }
-
-  const result: UserWithRelationship[] = [];
-
-  for (const user of users) {
-    if (blockedByThemSet.has(user.id)) continue;
-
-    const friendship = byOtherUser.get(user.id);
-    const isBlocked = blockedByMeSet.has(user.id);
-
-    if (!friendship) {
-      result.push({
-        ...user,
-        relationship: "NONE",
-        friendshipId: null,
-        isBlocked,
-      });
-      continue;
-    }
-
-    const relationship: Relationship =
-      friendship.status === "ACCEPTED"
-        ? "FRIENDS"
-        : friendship.senderId === currentUserId
-          ? "REQUEST_SENT"
-          : "REQUEST_RECEIVED";
-
-    result.push({
-      ...user,
-      relationship,
-      friendshipId: friendship.id,
-      isBlocked,
-    });
-  }
-
-  return result;
-};
+import {
+  friendUserSelect,
+  MAX_FRIENDS,
+  publicUserSelect,
+  SEARCH_LIMIT,
+} from "../utils/friendsConstants.js";
+import {
+  attachRelationships,
+  notifyRelationship,
+} from "../utils/friendsHelper.js";
 
 export const getSuggestions = async (
   req: AuthenticatedRequest,
