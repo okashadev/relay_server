@@ -1,5 +1,5 @@
 import type { Server as HttpServer } from "node:http";
-import { Server } from "socket.io";
+import { Server, type Socket } from "socket.io";
 import jwt, { type JwtPayload } from "jsonwebtoken";
 
 let io: Server | null = null;
@@ -10,13 +10,12 @@ const authError = (code: string) => {
   const error = new Error("Authentication failed") as Error & {
     data: { code: string };
   };
-
   error.data = { code };
   return error;
 };
 
 type SocketServerOptions = {
-  onConnect?: (userId: string) => void;
+  onConnection?: (socket: Socket) => void;
 };
 
 export const initSocketServer = (
@@ -66,7 +65,7 @@ export const initSocketServer = (
     const userId = socket.data.userId as string;
 
     socket.join(userRoom(userId));
-    options.onConnect?.(userId);
+    options.onConnection?.(socket);
 
     if (process.env.NODE_ENV !== "production") {
       console.log(`[socket] connected ${userId} (${socket.id})`);
@@ -79,9 +78,26 @@ export const initSocketServer = (
   return io;
 };
 
+export const isUserConnected = (userId: string) =>
+  (io?.sockets.adapter.rooms.get(userRoom(userId))?.size ?? 0) > 0;
+
 export const emitToUser = (userId: string, event: string, payload: unknown) => {
   try {
     io?.to(userRoom(userId)).emit(event, payload);
+  } catch (error) {
+    console.error("Socket emit failed:", error);
+  }
+};
+
+export const emitToUsers = (
+  userIds: string[],
+  event: string,
+  payload: unknown,
+) => {
+  if (userIds.length === 0) return;
+
+  try {
+    io?.to(userIds.map(userRoom)).emit(event, payload);
   } catch (error) {
     console.error("Socket emit failed:", error);
   }

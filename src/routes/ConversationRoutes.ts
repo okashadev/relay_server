@@ -8,6 +8,7 @@ import {
   markConversationRead,
   sendMessage,
   updateChatSettings,
+  deleteChat,
 } from "../controllers/ConversationController.js";
 import {
   deleteMessage,
@@ -22,8 +23,9 @@ conversationRouter.use(verifyAuth);
 
 conversationRouter.get("/", getChatsList);
 conversationRouter.get("/:id", getConversation);
-conversationRouter.post("/:id/read", markConversationRead);
 conversationRouter.post("/direct/new-chat", newChat);
+conversationRouter.delete("/:id", deleteChat);
+conversationRouter.post("/:id/read", markConversationRead);
 
 conversationRouter.get("/:id/messages", getMessages);
 conversationRouter.post("/:id/messages", sendMessage);

@@ -59,8 +59,7 @@ export const getSuggestions = async (
              OR (f."receiverId" = ${userId} AND f."senderId" = u."id")
         )
         AND NOT EXISTS (
-          SELECT 1
-          FROM "Block" b
+          SELECT 1 FROM "Block" b
           WHERE (b."blockerId" = ${userId} AND b."blockedId" = u."id")
              OR (b."blockerId" = u."id" AND b."blockedId" = ${userId})
         )
@@ -101,6 +100,8 @@ export const searchUser = async (req: AuthenticatedRequest, res: Response) => {
       where: {
         id: { not: userId },
         isEmailVerified: true,
+        blocksGiven: { none: { blockedId: userId } },
+        blocksReceived: { none: { blockerId: userId } },
         OR: [
           { username: { contains: q, mode: "insensitive" } },
           { name: { contains: q, mode: "insensitive" } },
@@ -140,7 +141,7 @@ export const sendFriendRequest = async (
     if (senderId === receiverId)
       return badRequest(res, "You cannot send a friend request to yourself.");
 
-    const [receiver, existing, isBlocked] = await Promise.all([
+    const [receiver, existing, block] = await Promise.all([
       db.user.findFirst({
         where: { id: receiverId, isEmailVerified: true },
         select: { id: true },
@@ -161,10 +162,11 @@ export const sendFriendRequest = async (
             { blockerId: receiverId, blockedId: senderId },
           ],
         },
+        select: { id: true },
       }),
     ]);
 
-    if (!receiver || isBlocked) {
+    if (!receiver || block) {
       return notFound(res, "User not found.");
     }
 

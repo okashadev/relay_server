@@ -3,7 +3,8 @@ import { disconnectDb } from "./config/db.js";
 import app from "./app.js";
 import { createServer } from "node:http";
 import { closeSocketServer, initSocketServer } from "./socket/socketServer.js";
-import { deliverPendingOnConnect } from "./utils/chat/receipts.js";
+import { registerSocketHandlers } from "./socket/handlers.js";
+import { resetStalePresence } from "./utils/presence.js";
 
 const requiredEnv = [
   "JWT_SECRET",
@@ -24,9 +25,11 @@ for (const key of requiredEnv) {
 const PORT = Number(process.env.PORT) || 5000;
 
 const httpServer = createServer(app);
-initSocketServer(httpServer, {
-  onConnect: (userId) => void deliverPendingOnConnect(userId),
-});
+initSocketServer(httpServer, { onConnection: registerSocketHandlers });
+
+void resetStalePresence().catch((error) =>
+  console.error("Presence reset failed:", error),
+);
 
 httpServer.keepAliveTimeout = 65_000;
 httpServer.headersTimeout = 66_000;
@@ -47,6 +50,11 @@ const shutdown = (signal: string) => {
 
   closeSocketServer().then(async () => {
     try {
+      try {
+        await resetStalePresence();
+      } catch (error) {
+        console.error("Presence reset failed:", error);
+      }
       await disconnectDb();
     } catch (error) {
       console.error("DB disconnect error:", error);

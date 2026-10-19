@@ -3,6 +3,8 @@ import { db } from "../config/db.js";
 import { Prisma } from "@prisma/client";
 import { pairKey } from "../utils/pairKey.js";
 import { getUserId } from "../utils/getUserId.js";
+import { SOCKET_EVENTS } from "../socket/events.js";
+import { emitToUser } from "../socket/socketServer.js";
 import { decodeCursor, encodeCursor } from "../utils/cursor.js";
 import { chatSettingsSchema } from "../validators/chatValidator.js";
 import { broadcastNewMessage } from "../utils/chat/messageEvents.js";
@@ -276,6 +278,7 @@ export const getConversation = async (
           mutedUntil: true,
           pinnedAt: true,
           isArchived: true,
+          leftAt: true,
         },
       }),
       getReceipts(id),
@@ -309,6 +312,8 @@ export const getConversation = async (
           })),
           me,
           receipts,
+          blockedByMe: false,
+          canSend: mine.leftAt === null,
         },
       });
     }
@@ -318,19 +323,26 @@ export const getConversation = async (
     )?.user;
 
     let otherUser: OtherUser = other ?? DELETED_USER;
+    let blockedByMe = false;
+    let blockedEitherWay = false;
 
     if (other) {
-      const block = await db.block.findFirst({
+      const blocks = await db.block.findMany({
         where: {
           OR: [
             { blockerId: userId, blockedId: other.id },
             { blockerId: other.id, blockedId: userId },
           ],
         },
-        select: { id: true },
+        select: { blockerId: true },
       });
 
-      if (block) otherUser = { ...other, status: "OFFLINE", lastSeen: null };
+      blockedEitherWay = blocks.length > 0;
+      blockedByMe = blocks.some((block) => block.blockerId === userId);
+
+      if (blockedEitherWay) {
+        otherUser = { ...other, status: "OFFLINE", lastSeen: null };
+      }
     }
 
     return res.status(200).json({
@@ -343,6 +355,8 @@ export const getConversation = async (
         otherUser,
         me,
         receipts,
+        blockedByMe,
+        canSend: Boolean(other) && !blockedEitherWay && mine.leftAt === null,
       },
     });
   } catch (error: any) {
@@ -464,7 +478,12 @@ export const getChatsList = async (
     const rowByConversation = new Map(
       rows.map((row) => [row.conversationId, row]),
     );
-    const blockedIds = new Set(
+    const blockedByMeIds = new Set(
+      blocks
+        .filter((block) => block.blockerId === userId)
+        .map((b) => b.blockedId),
+    );
+    const blockedAnyIds = new Set(
       blocks.map((block) =>
         block.blockerId === userId ? block.blockedId : block.blockerId,
       ),
@@ -491,7 +510,11 @@ export const getChatsList = async (
           : (conversation.name ?? "Group"),
         avatar: isDirect ? (other?.avatar ?? null) : conversation.avatar,
         isOnline:
-          isDirect && other?.status === "ONLINE" && !blockedIds.has(other.id),
+          isDirect &&
+          other?.status === "ONLINE" &&
+          !blockedAnyIds.has(other.id),
+        otherUserId: isDirect ? (other?.id ?? null) : null,
+        isBlocked: isDirect && other ? blockedByMeIds.has(other.id) : false,
         lastMessage: {
           type: row.type,
           content: deleted ? null : truncate(row.content),
@@ -833,16 +856,50 @@ export const updateChatSettings = async (
       select: { mutedUntil: true, pinnedAt: true, isArchived: true },
     });
 
-    return res.status(200).json({
-      success: true,
-      me: {
-        isMuted: Boolean(updated.mutedUntil && updated.mutedUntil > new Date()),
-        isPinned: updated.pinnedAt !== null,
-        isArchived: updated.isArchived,
-      },
+    const me = {
+      isMuted: Boolean(updated.mutedUntil && updated.mutedUntil > new Date()),
+      isPinned: updated.pinnedAt !== null,
+      isArchived: updated.isArchived,
+    };
+
+    res.status(200).json({ success: true, me });
+
+    emitToUser(userId, SOCKET_EVENTS.CONVERSATION_SETTINGS, {
+      conversationId,
+      me,
     });
   } catch (error: any) {
     console.error("Update Chat Settings Error:", error);
+    return serverError(res);
+  }
+};
+
+export const deleteChat = async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const userId = getUserId(req);
+    if (!userId) return unauthorized(res);
+
+    const paramsResult = conversationIdParamSchema.safeParse(req.params);
+    if (!paramsResult.success) {
+      return validationError(res, paramsResult.error);
+    }
+
+    const { id: conversationId } = paramsResult.data;
+
+    const rows = await db.$queryRaw<{ id: string }[]>`
+      UPDATE "ConversationParticipant"
+      SET "clearedAt" = now(), "pinnedAt" = NULL
+      WHERE "conversationId" = ${conversationId} AND "userId" = ${userId}
+      RETURNING "id"
+    `;
+
+    if (rows.length === 0) return notFound(res, "Conversation not found.");
+
+    res.status(200).json({ success: true });
+
+    emitToUser(userId, SOCKET_EVENTS.CONVERSATION_CLEARED, { conversationId });
+  } catch (error: any) {
+    console.error("Delete Chat Error:", error);
     return serverError(res);
   }
 };

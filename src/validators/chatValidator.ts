@@ -94,3 +94,11 @@ export const chatSettingsSchema = z
     mute: z.enum(["8h", "1w", "forever"]).nullable().optional(),
   })
   .refine((value) => Object.keys(value).length > 0, "Nothing to update.");
+
+export const blockBodySchema = z.object({
+  userId: z.uuid("Invalid user id."),
+});
+
+export const blockParamsSchema = z.object({
+  userId: z.uuid("Invalid user id."),
+});
