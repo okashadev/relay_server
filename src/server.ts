@@ -23,6 +23,7 @@ for (const key of requiredEnv) {
 }
 
 const PORT = Number(process.env.PORT) || 5000;
+// const HOST = "192.168.2.116";
 
 const httpServer = createServer(app);
 initSocketServer(httpServer, { onConnection: registerSocketHandlers });
@@ -33,6 +34,10 @@ void resetStalePresence().catch((error) =>
 
 httpServer.keepAliveTimeout = 65_000;
 httpServer.headersTimeout = 66_000;
+
+// httpServer.listen(Number(PORT), HOST, () => {
+//   console.log(`Server is running on http://${HOST}:${PORT}`);
+// });
 
 httpServer.listen(PORT, () => {
   console.log(`🚀 Relay Backend running on http://localhost:${PORT}`);

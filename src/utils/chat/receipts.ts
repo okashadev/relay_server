@@ -71,22 +71,26 @@ export const publishReceipts = async (conversationIds: string[]) => {
 export const markDelivered = async (
   conversationId: string,
   userIds: string[],
+  messageId: string,
 ) => {
   if (userIds.length === 0) return;
 
   await db.$executeRaw`
-    UPDATE "ConversationParticipant"
-    SET "lastDeliveredAt" = now()
-    WHERE "conversationId" = ${conversationId}
-      AND "userId" IN (${Prisma.join(userIds)})
-      AND "leftAt" IS NULL
+    UPDATE "ConversationParticipant" cp
+    SET "lastDeliveredAt" = m."createdAt"
+    FROM "Message" m
+    WHERE m."id" = ${messageId}
+      AND cp."conversationId" = ${conversationId}
+      AND cp."userId" IN (${Prisma.join(userIds)})
+      AND cp."leftAt" IS NULL
+      AND (cp."lastDeliveredAt" IS NULL OR cp."lastDeliveredAt" < m."createdAt")
   `;
 };
 
 const markAllDelivered = async (userId: string): Promise<string[]> => {
   const rows = await db.$queryRaw<{ conversationId: string }[]>`
     UPDATE "ConversationParticipant" cp
-    SET "lastDeliveredAt" = now()
+    SET "lastDeliveredAt" = c."lastMessageAt"
     FROM "Conversation" c
     WHERE cp."userId" = ${userId}
       AND cp."leftAt" IS NULL
@@ -112,7 +116,11 @@ export const markRead = async (
 ): Promise<boolean> => {
   const rows = await db.$queryRaw<{ id: string }[]>`
     UPDATE "ConversationParticipant" cp
-    SET "lastReadAt" = now(), "lastDeliveredAt" = now()
+    SET "lastReadAt" = c."lastMessageAt",
+        "lastDeliveredAt" = GREATEST(
+          COALESCE(cp."lastDeliveredAt", c."lastMessageAt"),
+          c."lastMessageAt"
+        )
     FROM "Conversation" c
     WHERE cp."conversationId" = ${conversationId}
       AND cp."userId" = ${userId}

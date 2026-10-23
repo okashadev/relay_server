@@ -15,12 +15,13 @@ import conversationRouter from "./routes/ConversationRoutes.js";
 import uploadRouter from "./routes/uploadRoutes.js";
 import blockRouter from "./routes/blockRoutes.js";
 import presenceRouter from "./routes/presenceRoutes.js";
+import groupRouter from "./routes/groupRoutes.js";
 
 const app: Express = express();
 
-// if (process.env.TRUST_PROXY) {
-//   app.set("trust proxy", Number(process.env.TRUST_PROXY));
-// }
+if (process.env.TRUST_PROXY) {
+  app.set("trust proxy", Number(process.env.TRUST_PROXY));
+}
 
 app.use((req: Request, res: Response, next: NextFunction) => {
   const start = Date.now();
@@ -61,6 +62,7 @@ app.use("/api/conversation", conversationRouter);
 app.use("/api/uploads", uploadRouter);
 app.use("/api/blocks", blockRouter);
 app.use("/api/presence", presenceRouter);
+app.use("/api/group", groupRouter);
 
 app.use((_req, res) => {
   res.status(404).json({ success: false, error: "Route not found." });

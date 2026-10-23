@@ -1,5 +1,4 @@
 import z from "zod";
-import { REACTION_EMOJIS } from "../utils/chat/reactions.js";
 
 const CURSOR_PATTERN =
   /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z_[0-9a-f-]{36}$/i;
@@ -8,6 +7,7 @@ const clientId = z.uuid("Invalid client id.");
 const replyToId = z.uuid("Invalid reply id.").nullish();
 const caption = z.string().trim().max(1000, "Caption is too long.").nullish();
 const publicId = z.string().min(1).max(200);
+const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
 export const newChatSchema = z.object({
   otherUserId: z.uuid("Invalid user id."),
@@ -80,7 +80,17 @@ export const editMessageSchema = z.object({
 });
 
 export const reactionSchema = z.object({
-  emoji: z.enum(REACTION_EMOJIS, { error: "Unsupported reaction." }),
+  emoji: z
+    .string()
+    .trim()
+    .min(1, "Unsupported reaction.")
+    .max(32, "Unsupported reaction.")
+    .refine(
+      (v) =>
+        [...graphemes.segment(v)].length === 1 &&
+        /\p{Extended_Pictographic}|\p{Regional_Indicator}|\u20E3/u.test(v),
+      "Unsupported reaction.",
+    ),
 });
 
 export const deleteMessageQuerySchema = z.object({
@@ -101,4 +111,12 @@ export const blockBodySchema = z.object({
 
 export const blockParamsSchema = z.object({
   userId: z.uuid("Invalid user id."),
+});
+
+export const searchQuerySchema = z.object({
+  q: z
+    .string({ error: "Search query is required." })
+    .trim()
+    .min(2, "Type at least 2 characters to search.")
+    .max(50, "Search query is too long."),
 });

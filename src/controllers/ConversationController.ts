@@ -6,11 +6,17 @@ import { getUserId } from "../utils/getUserId.js";
 import { SOCKET_EVENTS } from "../socket/events.js";
 import { emitToUser } from "../socket/socketServer.js";
 import { decodeCursor, encodeCursor } from "../utils/cursor.js";
-import { chatSettingsSchema } from "../validators/chatValidator.js";
+import {
+  chatSettingsSchema,
+  searchQuerySchema,
+} from "../validators/chatValidator.js";
 import { broadcastNewMessage } from "../utils/chat/messageEvents.js";
 import { AuthenticatedRequest } from "../middlewares/authMiddleware.js";
-import { LastMessageRow, OtherUser } from "../types/conversationTypes.js";
-import { toConversationResponse, truncate } from "../utils/chat/chatHelpers.js";
+import { OtherUser } from "../types/conversationTypes.js";
+import {
+  buildChatList,
+  toConversationResponse,
+} from "../utils/chat/chatHelpers.js";
 import {
   badRequest,
   conflict,
@@ -45,14 +51,11 @@ import {
 import {
   conversationSelect,
   DELETED_USER,
-  listUserSelect,
-  MAX_CHATS,
   MAX_MEMBERS,
   MAX_PINNED_CHATS,
   MUTE_DURATIONS_MS,
   MUTE_FOREVER,
   otherUserSelect,
-  UNREAD_CAP,
 } from "../utils/chat/chatConstants.js";
 
 export const newChat = async (req: AuthenticatedRequest, res: Response) => {
@@ -373,182 +376,11 @@ export const getChatsList = async (
     const userId = getUserId(req);
     if (!userId) return unauthorized(res);
 
-    const participants = await db.conversationParticipant.findMany({
-      where: { userId },
-      orderBy: [
-        { pinnedAt: { sort: "desc", nulls: "last" } },
-        { conversation: { lastMessageAt: "desc" } },
-      ],
-      take: MAX_CHATS,
-      select: {
-        conversationId: true,
-        mutedUntil: true,
-        pinnedAt: true,
-        isArchived: true,
-        conversation: {
-          select: {
-            type: true,
-            name: true,
-            avatar: true,
-            participants: {
-              where: { userId: { not: userId } },
-              take: 1,
-              select: { user: { select: listUserSelect } },
-            },
-          },
-        },
-      },
-    });
+    const chats = await buildChatList(userId, null);
 
     res.set("Cache-Control", "no-store");
 
-    if (participants.length === 0) {
-      return res.status(200).json({ success: true, chats: [] });
-    }
-
-    const conversationIds = participants.map((p) => p.conversationId);
-    const otherUserIds = participants.flatMap((p) => {
-      const other = p.conversation.participants[0]?.user;
-      return p.conversation.type === "DIRECT" && other ? [other.id] : [];
-    });
-
-    const [rows, blocks] = await Promise.all([
-      db.$queryRaw<LastMessageRow[]>`
-        SELECT
-          cp."conversationId",
-          lm."type",
-          lm."content",
-          lm."fileName",
-          lm."senderId",
-          lm."deletedAt",
-          lm."createdAt",
-          sender."name" AS "senderName",
-          unread."count" AS "unreadCount"
-        FROM "ConversationParticipant" cp
-        JOIN LATERAL (
-          SELECT m."type", m."content", m."fileName", m."senderId",
-                 m."deletedAt", m."createdAt"
-          FROM "Message" m
-          WHERE m."conversationId" = cp."conversationId"
-            AND (cp."clearedAt" IS NULL OR m."createdAt" > cp."clearedAt")
-            AND (cp."leftAt" IS NULL OR m."createdAt" <= cp."leftAt")
-            AND NOT EXISTS (
-              SELECT 1 FROM "MessageDeletion" d
-              WHERE d."messageId" = m."id" AND d."userId" = cp."userId"
-            )
-          ORDER BY m."createdAt" DESC, m."id" DESC
-          LIMIT 1
-        ) lm ON true
-        LEFT JOIN "User" sender ON sender."id" = lm."senderId"
-        CROSS JOIN LATERAL (
-          SELECT COUNT(*)::int AS "count"
-          FROM (
-            SELECT 1
-            FROM "Message" m
-            WHERE m."conversationId" = cp."conversationId"
-              AND m."senderId" IS DISTINCT FROM cp."userId"
-              AND m."type" <> 'SYSTEM'
-              AND m."deletedAt" IS NULL
-              AND (cp."lastReadAt" IS NULL OR m."createdAt" > cp."lastReadAt")
-              AND (cp."clearedAt" IS NULL OR m."createdAt" > cp."clearedAt")
-              AND (cp."leftAt" IS NULL OR m."createdAt" <= cp."leftAt")
-              AND NOT EXISTS (
-                SELECT 1 FROM "MessageDeletion" d
-                WHERE d."messageId" = m."id" AND d."userId" = cp."userId"
-              )
-            LIMIT ${UNREAD_CAP}
-          ) capped
-        ) unread
-        WHERE cp."userId" = ${userId}
-          AND cp."conversationId" IN (${Prisma.join(conversationIds)})
-      `,
-      otherUserIds.length > 0
-        ? db.block.findMany({
-            where: {
-              OR: [
-                { blockerId: userId, blockedId: { in: otherUserIds } },
-                { blockedId: userId, blockerId: { in: otherUserIds } },
-              ],
-            },
-            select: { blockerId: true, blockedId: true },
-          })
-        : Promise.resolve<{ blockerId: string; blockedId: string }[]>([]),
-    ]);
-
-    const rowByConversation = new Map(
-      rows.map((row) => [row.conversationId, row]),
-    );
-    const blockedByMeIds = new Set(
-      blocks
-        .filter((block) => block.blockerId === userId)
-        .map((b) => b.blockedId),
-    );
-    const blockedAnyIds = new Set(
-      blocks.map((block) =>
-        block.blockerId === userId ? block.blockedId : block.blockerId,
-      ),
-    );
-
-    const now = new Date();
-
-    const entries = participants.flatMap((participant) => {
-      const row = rowByConversation.get(participant.conversationId);
-
-      if (!row) return [];
-
-      const { conversation } = participant;
-      const other = conversation.participants[0]?.user;
-      const isDirect = conversation.type === "DIRECT";
-      const isMine = row.senderId === userId;
-      const deleted = row.deletedAt !== null;
-
-      const chat = {
-        id: participant.conversationId,
-        type: conversation.type,
-        name: isDirect
-          ? (other?.name ?? "Deleted user")
-          : (conversation.name ?? "Group"),
-        avatar: isDirect ? (other?.avatar ?? null) : conversation.avatar,
-        isOnline:
-          isDirect &&
-          other?.status === "ONLINE" &&
-          !blockedAnyIds.has(other.id),
-        otherUserId: isDirect ? (other?.id ?? null) : null,
-        isBlocked: isDirect && other ? blockedByMeIds.has(other.id) : false,
-        lastMessage: {
-          type: row.type,
-          content: deleted ? null : truncate(row.content),
-          fileName: deleted ? null : row.fileName,
-          senderName: isMine ? null : row.senderName,
-          isMine,
-          deleted,
-        },
-        lastMessageAt: row.createdAt,
-        unreadCount: row.unreadCount,
-        isMuted: Boolean(
-          participant.mutedUntil && participant.mutedUntil > now,
-        ),
-        isPinned: participant.pinnedAt !== null,
-        isArchived: participant.isArchived,
-      };
-      return [{ chat, pinnedAt: participant.pinnedAt }];
-    });
-
-    entries.sort((a, b) => {
-      if (a.pinnedAt && b.pinnedAt) {
-        return b.pinnedAt.getTime() - a.pinnedAt.getTime();
-      }
-      if (a.pinnedAt || b.pinnedAt) return a.pinnedAt ? -1 : 1;
-
-      return (
-        new Date(b.chat.lastMessageAt).getTime() -
-        new Date(a.chat.lastMessageAt).getTime()
-      );
-    });
-
-    return res
-      .status(200)
-      .json({ success: true, chats: entries.map((entry) => entry.chat) });
+    return res.status(200).json({ success: true, chats });
   } catch (error: any) {
     console.error("Get Conversations List Error:", error);
     return serverError(res);
@@ -632,25 +464,11 @@ export const sendMessage = async (req: AuthenticatedRequest, res: Response) => {
           .find((id) => id !== userId)
       : undefined;
 
-    const [existing, reply, directState] = await Promise.all([
+    const [existing, directState] = await Promise.all([
       db.message.findFirst({
         where: { senderId: userId, clientId: input.clientId },
         select: { ...messageSelect, conversationId: true },
       }),
-      input.replyToId
-        ? db.message.findFirst({
-            where: {
-              id: input.replyToId,
-              conversationId,
-              deletedAt: null,
-              deletions: { none: { userId } },
-              ...(participant.clearedAt
-                ? { createdAt: { gt: participant.clearedAt } }
-                : {}),
-            },
-            select: { id: true },
-          })
-        : Promise.resolve(null),
       otherUserId
         ? Promise.all([
             db.conversationParticipant.findUnique({
@@ -689,13 +507,6 @@ export const sendMessage = async (req: AuthenticatedRequest, res: Response) => {
       if (!otherParticipant || block) {
         return forbidden(res, "You can't send messages in this conversation.");
       }
-    }
-
-    if (input.replyToId && !reply) {
-      return badRequest(
-        res,
-        "The message you're replying to is no longer available.",
-      );
     }
 
     let media: VerifiedMedia | null = null;
@@ -887,10 +698,15 @@ export const deleteChat = async (req: AuthenticatedRequest, res: Response) => {
     const { id: conversationId } = paramsResult.data;
 
     const rows = await db.$queryRaw<{ id: string }[]>`
-      UPDATE "ConversationParticipant"
-      SET "clearedAt" = now(), "pinnedAt" = NULL
-      WHERE "conversationId" = ${conversationId} AND "userId" = ${userId}
-      RETURNING "id"
+      UPDATE "ConversationParticipant" cp
+      SET "clearedAt" = COALESCE(
+            (SELECT max(m."createdAt") FROM "Message" m
+             WHERE m."conversationId" = cp."conversationId"),
+            cp."clearedAt"
+          ),
+          "pinnedAt" = NULL
+      WHERE cp."conversationId" = ${conversationId} AND cp."userId" = ${userId}
+      RETURNING cp."id"
     `;
 
     if (rows.length === 0) return notFound(res, "Conversation not found.");
@@ -900,6 +716,30 @@ export const deleteChat = async (req: AuthenticatedRequest, res: Response) => {
     emitToUser(userId, SOCKET_EVENTS.CONVERSATION_CLEARED, { conversationId });
   } catch (error: any) {
     console.error("Delete Chat Error:", error);
+    return serverError(res);
+  }
+};
+
+export const searchConversations = async (
+  req: AuthenticatedRequest,
+  res: Response,
+) => {
+  try {
+    const userId = getUserId(req);
+    if (!userId) return unauthorized(res);
+
+    const queryResult = searchQuerySchema.safeParse(req.query);
+    if (!queryResult.success) return validationError(res, queryResult.error);
+
+    const { q } = queryResult.data;
+
+    const chats = await buildChatList(userId, q);
+
+    res.set("Cache-Control", "no-store");
+
+    return res.status(200).json({ success: true, chats });
+  } catch (error: any) {
+    console.error("Search Conversations Error: ", error);
     return serverError(res);
   }
 };

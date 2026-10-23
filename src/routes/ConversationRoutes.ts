@@ -9,6 +9,7 @@ import {
   sendMessage,
   updateChatSettings,
   deleteChat,
+  searchConversations,
 } from "../controllers/ConversationController.js";
 import {
   deleteMessage,
@@ -22,17 +23,19 @@ const conversationRouter = Router();
 conversationRouter.use(verifyAuth);
 
 conversationRouter.get("/", getChatsList);
-conversationRouter.get("/:id", getConversation);
+conversationRouter.get("/search", searchConversations);
+
 conversationRouter.post("/direct/new-chat", newChat);
+conversationRouter.get("/:id", getConversation);
+conversationRouter.patch("/:id/settings", updateChatSettings);
 conversationRouter.delete("/:id", deleteChat);
+
 conversationRouter.post("/:id/read", markConversationRead);
 
 conversationRouter.get("/:id/messages", getMessages);
 conversationRouter.post("/:id/messages", sendMessage);
 conversationRouter.patch("/:id/messages/:messageId", editMessage);
 conversationRouter.delete("/:id/messages/:messageId", deleteMessage);
-
-conversationRouter.patch("/:id/settings", updateChatSettings);
 
 conversationRouter.put("/:id/messages/:messageId/reaction", setReaction);
 conversationRouter.delete("/:id/messages/:messageId/reaction", removeReaction);

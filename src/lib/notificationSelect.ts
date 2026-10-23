@@ -9,4 +9,10 @@ export const notificationSelect = {
     select: { id: true, name: true, username: true, avatar: true },
   },
   friendship: { select: { id: true, status: true } },
+  conversation: {
+    select: {
+      id: true,
+      name: true,
+    },
+  },
 } satisfies Prisma.NotificationSelect;

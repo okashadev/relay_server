@@ -75,14 +75,12 @@ export const handleUserConnected = async (userId: string) => {
   }
 
   try {
-    const rows = await db.$queryRaw<{ lastSeen: Date }[]>`
-      UPDATE "User" SET "status" = 'ONLINE'
-      WHERE "id" = ${userId} AND "status" = 'OFFLINE'
-      RETURNING "lastSeen"
-    `;
+    const { count } = await db.user.updateMany({
+      where: { id: userId, status: "OFFLINE" },
+      data: { status: "ONLINE" },
+    });
 
-    if (rows.length > 0)
-      await broadcastPresence(userId, "ONLINE", rows[0].lastSeen);
+    if (count > 0) await broadcastPresence(userId, "ONLINE", new Date());
   } catch (error: any) {
     console.error("Presence connect failed:", error);
   }
@@ -102,15 +100,13 @@ export const handleUserDisconnected = async (userId: string) => {
       if (isUserConnected(userId)) return;
 
       try {
-        const rows = await db.$queryRaw<{ lastSeen: Date }[]>`
-          UPDATE "User" SET "status" = 'OFFLINE', "lastSeen" = now()
-          WHERE "id" = ${userId} AND "status" = 'ONLINE'
-          RETURNING "lastSeen"
-        `;
+        const lastSeen = new Date();
+        const { count } = await db.user.updateMany({
+          where: { id: userId, status: "ONLINE" },
+          data: { status: "OFFLINE", lastSeen },
+        });
 
-        if (rows.length > 0) {
-          await broadcastPresence(userId, "OFFLINE", rows[0].lastSeen);
-        }
+        if (count > 0) await broadcastPresence(userId, "OFFLINE", lastSeen);
       } catch (error: any) {
         console.error("Presence disconnect failed:", error);
       }
@@ -119,10 +115,10 @@ export const handleUserDisconnected = async (userId: string) => {
 };
 
 export const resetStalePresence = async () => {
-  await db.$executeRaw`
-      UPDATE "User" SET "status" = 'OFFLINE', "lastSeen" = now()
-      WHERE "status" = 'ONLINE'
-    `;
+  await db.user.updateMany({
+    where: { status: "ONLINE" },
+    data: { status: "OFFLINE", lastSeen: new Date() },
+  });
 };
 
 export const hidePresenceBetween = (a: string, b: string) => {
