@@ -10,6 +10,7 @@ export const SOCKET_EVENTS = {
   CONVERSATION_SETTINGS: "conversation:settings",
   CONVERSATION_CLEARED: "conversation:cleared",
   BLOCK_UPDATED: "block:updated",
+  GROUP_UPDATED: "group:updated",
 } as const;
 
 export const CLIENT_EVENTS = {

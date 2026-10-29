@@ -122,3 +122,21 @@ export const friendsListLimiter = createLimiter({
   limit: 120,
   message: "Too many requests. Please try again shortly.",
 });
+
+export const storyReadLimiter = createLimiter({
+  windowMs: 15 * MINUTE,
+  limit: 200,
+  message: "Too many requests. Please try again shortly.",
+});
+
+export const storyWriteLimiter = createLimiter({
+  windowMs: 60 * MINUTE,
+  limit: 60,
+  message: "You're posting stories too quickly. Please try again later.",
+});
+
+export const storyViewLimiter = createLimiter({
+  windowMs: 15 * MINUTE,
+  limit: 600,
+  message: "Too many requests. Please try again shortly.",
+});

@@ -5,6 +5,7 @@ import { createServer } from "node:http";
 import { closeSocketServer, initSocketServer } from "./socket/socketServer.js";
 import { registerSocketHandlers } from "./socket/handlers.js";
 import { resetStalePresence } from "./utils/presence.js";
+import { startStoryPurgeJob } from "./utils/stories/storyPurge.js";
 
 const requiredEnv = [
   "JWT_SECRET",
@@ -14,6 +15,9 @@ const requiredEnv = [
   "BREVO_SMTP_USER",
   "BREVO_SMTP_KEY",
   "SENDER_EMAIL",
+  "CLOUDINARY_API_SECRET",
+  "CLOUDINARY_API_KEY",
+  "CLOUDINARY_CLOUD_NAME",
 ];
 
 for (const key of requiredEnv) {
@@ -43,6 +47,8 @@ httpServer.listen(PORT, () => {
   console.log(`🚀 Relay Backend running on http://localhost:${PORT}`);
 });
 
+const stopStoryPurge = startStoryPurgeJob();
+
 let isShuttingDown = false;
 
 const shutdown = (signal: string) => {
@@ -52,6 +58,7 @@ const shutdown = (signal: string) => {
   console.log(`${signal} received, shutting down...`);
 
   setTimeout(() => process.exit(1), 10_000).unref();
+  stopStoryPurge();
 
   closeSocketServer().then(async () => {
     try {

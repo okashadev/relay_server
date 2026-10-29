@@ -16,6 +16,7 @@ import uploadRouter from "./routes/uploadRoutes.js";
 import blockRouter from "./routes/blockRoutes.js";
 import presenceRouter from "./routes/presenceRoutes.js";
 import groupRouter from "./routes/groupRoutes.js";
+import storyRouter from "./routes/storyRoutes.js";
 
 const app: Express = express();
 
@@ -63,6 +64,7 @@ app.use("/api/uploads", uploadRouter);
 app.use("/api/blocks", blockRouter);
 app.use("/api/presence", presenceRouter);
 app.use("/api/group", groupRouter);
+app.use("/api/stories", storyRouter);
 
 app.use((_req, res) => {
   res.status(404).json({ success: false, error: "Route not found." });

@@ -217,7 +217,7 @@ export const buildChatList = async (userId: string, q: string | null) => {
 
   const now = new Date();
 
- const entries = participants.flatMap((participant) => {
+  const entries = participants.flatMap((participant) => {
     const row = rowByConversation.get(participant.conversationId);
 
     if (!row && q === null) return [];
@@ -225,7 +225,8 @@ export const buildChatList = async (userId: string, q: string | null) => {
     const { conversation } = participant;
     const other = conversation.participants[0]?.user;
     const isDirect = conversation.type === "DIRECT";
-    const isMine = row?.senderId === userId;
+    const isSystem = row?.type === "SYSTEM";
+    const isMine = !isSystem && row?.senderId === userId;
     const deleted = row ? row.deletedAt !== null : false;
 
     const chat = {
@@ -244,7 +245,7 @@ export const buildChatList = async (userId: string, q: string | null) => {
             type: row.type,
             content: deleted ? null : truncate(row.content),
             fileName: deleted ? null : row.fileName,
-            senderName: isMine ? null : row.senderName,
+            senderName: isMine || isSystem ? null : row.senderName,
             isMine,
             deleted,
           }

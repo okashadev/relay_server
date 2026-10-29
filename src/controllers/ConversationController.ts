@@ -262,6 +262,7 @@ export const getConversation = async (
           createdAt: true,
           createdBy: { select: { id: true, name: true } },
           participants: {
+            where: { leftAt: null },
             select: { role: true, user: { select: otherUserSelect } },
             orderBy: { joinedAt: "asc" },
             take: MAX_MEMBERS,

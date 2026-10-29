@@ -15,6 +15,9 @@ import {
   unauthorized,
   validationError,
 } from "../utils/httpResponses.js";
+import { getUserId } from "../utils/getUserId.js";
+import { signStoryUploadSchema } from "../validators/storyValidator.js";
+import { newStoryPublicId } from "../utils/stories/media.js";
 
 export const signChatUpload = async (
   req: AuthenticatedRequest,
@@ -72,6 +75,67 @@ export const signChatUpload = async (
     });
   } catch (error: any) {
     console.error("Sign Upload Error:", error);
+    return serverError(res);
+  }
+};
+
+export const signStoryUpload = async (
+  req: AuthenticatedRequest,
+  res: Response,
+) => {
+  try {
+    const userId = getUserId(req);
+    if (!userId) return unauthorized(res);
+
+    const result = signStoryUploadSchema.safeParse(req.body);
+    if (!result.success) return validationError(res, result.error);
+
+    const { kind, mimeType, size } = result.data;
+    const rule = MEDIA_RULES[kind];
+
+    if (size > rule.maxBytes) {
+      return badRequest(
+        res,
+        `File is too large. Maximum size is ${Math.round(rule.maxBytes / MB)} MB.`,
+      );
+    }
+
+    const format = formatFromMime(kind, mimeType);
+
+    if (!format || !rule.formats.includes(format)) {
+      return badRequest(res, "This file type isn't supported.");
+    }
+
+    const publicId = newStoryPublicId(userId, kind);
+
+    const params: Record<string, string | number> = {
+      public_id: publicId,
+      timestamp: Math.floor(Date.now() / 1000),
+      allowed_formats: rule.formats.join(","),
+    };
+
+    const signature = cloudinary.utils.api_sign_request(
+      params,
+      process.env.CLOUDINARY_API_SECRET as string,
+    );
+
+    res.set("Cache-Control", "no-store");
+
+    return res.status(200).json({
+      success: true,
+      upload: {
+        url: `https://api.cloudinary.com/v1_1/${process.env.CLOUDINARY_CLOUD_NAME}/${rule.resourceType}/upload`,
+        publicId,
+        fields: {
+          ...params,
+          api_key: process.env.CLOUDINARY_API_KEY as string,
+          signature,
+        },
+        maxBytes: rule.maxBytes,
+      },
+    });
+  } catch (error: any) {
+    console.error("Sign Story Upload Error:", error);
     return serverError(res);
   }
 };

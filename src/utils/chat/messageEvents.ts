@@ -1,7 +1,11 @@
 import { db } from "../../config/db.js";
 import { SOCKET_EVENTS } from "../../socket/events.js";
 import { emitToUser, emitToUserWithAck } from "../../socket/socketServer.js";
-import { messageSelect, serializeMessage, type MessageRow } from "./messages.js";
+import {
+  messageSelect,
+  serializeMessage,
+  type MessageRow,
+} from "./messages.js";
 import { markDelivered, publishReceipts } from "../chat/receipts.js";
 
 export const broadcastNewMessage = async (
@@ -40,7 +44,7 @@ export const broadcastNewMessage = async (
     const deliveredTo = results.filter((id): id is string => id !== null);
 
     if (deliveredTo.length > 0) {
-      await markDelivered(conversationId, deliveredTo);
+      await markDelivered(conversationId, deliveredTo, message.id);
       await publishReceipts([conversationId]);
     }
   } catch (error) {
@@ -54,7 +58,10 @@ export const broadcastMessageUpdated = async (
 ) => {
   try {
     const [message, participants] = await Promise.all([
-      db.message.findUnique({ where: { id: messageId }, select: messageSelect }),
+      db.message.findUnique({
+        where: { id: messageId },
+        select: messageSelect,
+      }),
       db.conversationParticipant.findMany({
         where: { conversationId, leftAt: null },
         select: { userId: true, clearedAt: true },

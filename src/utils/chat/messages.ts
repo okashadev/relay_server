@@ -33,6 +33,18 @@ export const messageSelect = {
       sender: { select: { name: true } },
     },
   },
+  storyId: true,
+  story: {
+    select: {
+      id: true,
+      type: true,
+      thumbnailUrl: true,
+      caption: true,
+      backgroundColor: true,
+      expiresAt: true,
+      deletedAt: true,
+    },
+  },
   reactions: { select: { emoji: true, userId: true } },
   editedAt: true,
   deletedAt: true,
@@ -82,6 +94,10 @@ export const serializeMessage = (
     (reply.deletedAt !== null ||
       (clearedAt !== null && reply.createdAt <= clearedAt));
 
+  const story = message.story;
+  const storyAvailable =
+    story !== null && story.deletedAt === null && story.expiresAt > new Date();
+
   return {
     id: message.id,
     clientId: message.senderId === viewerId ? message.clientId : null,
@@ -106,6 +122,17 @@ export const serializeMessage = (
             content: hideReplyContent ? null : reply.content,
             senderName: reply.sender?.name ?? null,
             deleted: reply.deletedAt !== null,
+          }
+        : null,
+    story:
+      story && !isDeleted
+        ? {
+            id: story.id,
+            type: story.type,
+            available: storyAvailable,
+            thumbnailUrl: storyAvailable ? story.thumbnailUrl : null,
+            caption: storyAvailable ? story.caption : null,
+            backgroundColor: storyAvailable ? story.backgroundColor : null,
           }
         : null,
     reactions: isDeleted ? [] : summarizeReactions(message.reactions, viewerId),
