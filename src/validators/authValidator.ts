@@ -2,7 +2,7 @@ import z from "zod";
 
 const MAX_PASSWORD_BYTES = 72;
 
-const RESERVED_USERNAMES = new Set([
+export const RESERVED_USERNAMES = new Set([
   "admin",
   "administrator",
   "root",
@@ -15,19 +15,19 @@ const RESERVED_USERNAMES = new Set([
   "undefined",
 ]);
 
-const emailField = z
+export const emailField = z
   .string({ error: "Email is required." })
   .trim()
   .toLowerCase()
   .max(254, "Email is too long.")
   .pipe(z.email("Please enter a valid email address."));
 
-const codeField = z
+export const codeField = z
   .string({ error: "Verification code is required." })
   .transform((value) => value.replace(/\s+/g, "").toUpperCase())
   .pipe(z.string().regex(/^[A-HJ-KM-NP-Z2-9]{8}$/, "Invalid or expired code."));
 
-const withinBcryptLimit = (value: string) =>
+export const withinBcryptLimit = (value: string) =>
   Buffer.byteLength(value, "utf8") <= MAX_PASSWORD_BYTES;
 
 export const registerSchema = z.object({

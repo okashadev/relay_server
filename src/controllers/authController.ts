@@ -24,6 +24,9 @@ import {
   VERIFICATION_CODE_TTL_MS,
   RESEND_COOLDOWN_MS,
 } from "../utils/generateVerificationCode.js";
+import { authUserSelect } from "../utils/auth/authUser.js";
+import { hashPassword } from "../utils/auth/password.js";
+import { validationError } from "../utils/httpResponses.js";
 
 const client = new OAuth2Client(
   process.env.GOOGLE_CLIENT_ID,
@@ -88,7 +91,7 @@ export const register = async (req: Request, res: Response) => {
       }
     }
 
-    const hashedPassword = await bcrypt.hash(password, 12);
+    const hashedPassword = await hashPassword(password);
 
     const verificationCode = generateVerificationCode();
 
@@ -227,8 +230,10 @@ export const login = async (req: Request, res: Response) => {
         name: user.name,
         username: user.username,
         avatar: user.avatar,
+        bio: user.bio,
         email: user.email,
         isEmailVerified: user.isEmailVerified,
+        provider: user.provider,
       },
     });
   } catch (error: any) {
@@ -251,17 +256,9 @@ export const googleAuth = async (req: Request, res: Response) => {
       });
     }
 
-    const t0 = Date.now();
-    const step = (label: string) =>
-      console.log(`[google] ${label} +${Date.now() - t0}ms`);
-
-    step("request aayi");
-
     let payload;
     try {
-      step("exchange shuru");
       const { tokens } = await client.getToken(code);
-      step("exchange mukammal");
 
       if (!tokens.id_token) {
         throw new Error("No id_token received from Google");
@@ -272,7 +269,6 @@ export const googleAuth = async (req: Request, res: Response) => {
         audience: process.env.GOOGLE_CLIENT_ID,
       });
       payload = ticket.getPayload();
-      step("verify mukammal");
     } catch (err: any) {
       console.error("Google code exchange error:", err);
       return res.status(401).json({
@@ -300,8 +296,6 @@ export const googleAuth = async (req: Request, res: Response) => {
     let user = await db.user.findUnique({
       where: { email },
     });
-
-    step("db find mukammal");
 
     if (user && user.provider === "LOCAL") {
       return res.status(409).json({
@@ -343,16 +337,12 @@ export const googleAuth = async (req: Request, res: Response) => {
           emailVerifiedAt: new Date(),
         },
       });
-
-      step("db create mukammal");
-
     }
 
     const accessToken = generateAccessToken(user);
     const refreshToken = await createRefreshToken(user.id);
     setRefreshCookie(res, refreshToken);
 
-    step("response bhej raha hun");
     return res.status(200).json({
       success: true,
       message: "Google Authentication successful",
@@ -363,7 +353,9 @@ export const googleAuth = async (req: Request, res: Response) => {
         name: user.name,
         username: user.username,
         avatar: user.avatar,
+        bio: user.bio,
         isEmailVerified: user.isEmailVerified,
+        provider: user.provider,
       },
     });
   } catch (error: any) {
@@ -440,7 +432,9 @@ export const refresh = async (req: Request, res: Response) => {
         username: stored.user.username,
         email: stored.user.email,
         avatar: stored.user.avatar,
+        bio: stored.user.bio,
         isEmailVerified: stored.user.isEmailVerified,
+        provider: stored.user.provider,
       },
     });
   } catch (error: any) {
@@ -540,14 +534,7 @@ export const verifyEmail = async (req: Request, res: Response) => {
         verificationAttempts: 0,
         verificationLastSentAt: null,
       },
-      select: {
-        id: true,
-        name: true,
-        username: true,
-        email: true,
-        avatar: true,
-        isEmailVerified: true,
-      },
+      select: authUserSelect,
     });
 
     const accessToken = generateAccessToken(verifiedUser);
@@ -572,12 +559,8 @@ export const resendVerificationCode = async (req: Request, res: Response) => {
   try {
     const validationResult = resendCodeSchema.safeParse(req.body);
 
-    if (!validationResult.success) {
-      return res.status(400).json({
-        success: false,
-        error: validationResult.error.issues[0].message,
-      });
-    }
+    if (!validationResult.success)
+      return validationError(res, validationResult.error);
 
     const { email } = validationResult.data;
 

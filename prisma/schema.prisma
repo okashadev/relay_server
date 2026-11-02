@@ -40,7 +40,13 @@ model User {
   verificationAttempts   Int       @default(0)
   verificationLastSentAt DateTime?
 
+  pendingEmail            String?   @unique
+  pendingEmailRequestedAt DateTime?
+
   refreshTokens RefreshToken[]
+
+  devices   Device[]
+  keyBackup KeyBackup?
 
   sentFriendRequests     Friendship[] @relation("Sender")
   receivedFriendRequests Friendship[] @relation("Receiver")
@@ -67,16 +73,131 @@ model RefreshToken {
   id        String   @id @default(uuid())
   token     String   @unique
   userId    String
+  deviceId  String?
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  device    Device?  @relation(fields: [deviceId], references: [id], onDelete: SetNull)
   createdAt DateTime @default(now())
   expiresAt DateTime
 
   @@index([userId])
+  @@index([deviceId])
   @@index([expiresAt])
 }
 
 // ==========================================
-// 2. FRIENDSHIP & BLOCK SYSTEM
+// 2. END-TO-END ENCRYPTION
+// ==========================================
+
+model Device {
+  id             String  @id @default(uuid())
+  userId         String
+  registrationId Int
+  name           String
+  platform       String?
+
+  identityKey String
+
+  signedPreKeyId        Int
+  signedPreKey          String
+  signedPreKeySignature String
+  signedPreKeyAt        DateTime @default(now())
+
+  lastActiveAt DateTime  @default(now())
+  revokedAt    DateTime?
+  createdAt    DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  oneTimePreKeys    OneTimePreKey[]
+  kyberPreKeys      KyberPreKey[]
+  refreshTokens     RefreshToken[]
+  sentMessages      Message[]
+  receivedEnvelopes MessageEnvelope[] @relation("EnvelopeRecipient")
+  sentEnvelopes     MessageEnvelope[] @relation("EnvelopeSender")
+
+  @@unique([userId, registrationId])
+  @@index([userId, revokedAt])
+}
+
+model OneTimePreKey {
+  id        String   @id @default(uuid())
+  deviceId  String
+  keyId     Int
+  publicKey String
+  createdAt DateTime @default(now())
+
+  device Device @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+
+  @@unique([deviceId, keyId])
+  @@index([deviceId])
+}
+
+model KyberPreKey {
+  id           String   @id @default(uuid())
+  deviceId     String
+  keyId        Int
+  publicKey    String
+  signature    String
+  isLastResort Boolean  @default(false)
+  createdAt    DateTime @default(now())
+
+  device Device @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+
+  @@unique([deviceId, keyId])
+  @@index([deviceId, isLastResort])
+}
+
+enum EnvelopeKind {
+  MESSAGE
+  EDIT
+  SENDER_KEY
+}
+
+model MessageEnvelope {
+  id                String       @id @default(uuid())
+  recipientDeviceId String
+  senderDeviceId    String?
+  conversationId    String
+  messageId         String?
+  kind              EnvelopeKind @default(MESSAGE)
+  revision          Int          @default(0)
+
+  ciphertextType Int
+  ciphertext     String
+
+  acknowledgedAt DateTime?
+
+  createdAt DateTime @default(now())
+
+  recipientDevice Device       @relation("EnvelopeRecipient", fields: [recipientDeviceId], references: [id], onDelete: Cascade)
+  senderDevice    Device?      @relation("EnvelopeSender", fields: [senderDeviceId], references: [id], onDelete: SetNull)
+  conversation    Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  message         Message?     @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, recipientDeviceId, kind, revision])
+  @@index([recipientDeviceId, createdAt, id])
+  @@index([recipientDeviceId, acknowledgedAt])
+  @@index([messageId])
+  @@index([conversationId])
+}
+
+model KeyBackup {
+  id        String   @id @default(uuid())
+  userId    String   @unique
+  data      Bytes
+  salt      String
+  kdf       String
+  kdfParams Json
+  version   Int      @default(1)
+  sizeBytes Int
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// ==========================================
+// 3. FRIENDSHIP & BLOCK SYSTEM
 // ==========================================
 
 enum FriendStatus {
@@ -120,7 +241,7 @@ model Block {
 }
 
 // ==========================================
-// 3. CONVERSATIONS (DIRECT + GROUP)
+// 4. CONVERSATIONS (DIRECT + GROUP)
 // ==========================================
 
 enum ConversationType {
@@ -146,11 +267,14 @@ model Conversation {
   createdById String?
   createdBy   User?   @relation("ConversationCreator", fields: [createdById], references: [id], onDelete: SetNull)
 
+  membershipVersion Int @default(0)
+
   lastMessageAt DateTime @default(now())
 
   participants  ConversationParticipant[]
   notifications Notification[]
   messages      Message[]
+  envelopes     MessageEnvelope[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -182,7 +306,7 @@ model ConversationParticipant {
 }
 
 // ==========================================
-// 4. MESSAGES
+// 5. MESSAGES
 // ==========================================
 
 enum MessageType {
@@ -198,17 +322,14 @@ model Message {
   id             String      @id @default(uuid())
   conversationId String
   senderId       String?
+  senderDeviceId String?
   type           MessageType @default(TEXT)
-  content        String?
 
-  mediaUrl      String?
-  thumbnailUrl  String?
-  mediaMimeType String?
-  fileName      String?
-  mediaSize     Int?
-  mediaWidth    Int?
-  mediaHeight   Int?
-  mediaDuration Int?
+  content String?
+
+  mediaUrl     String?
+  thumbnailUrl String?
+  mediaSize    Int?
 
   metadata Json?
 
@@ -222,16 +343,19 @@ model Message {
 
   conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   sender       User?        @relation(fields: [senderId], references: [id], onDelete: SetNull)
+  senderDevice Device?      @relation(fields: [senderDeviceId], references: [id], onDelete: SetNull)
   replyTo      Message?     @relation("MessageReplies", fields: [replyToId], references: [id], onDelete: SetNull)
   replies      Message[]    @relation("MessageReplies")
   story        Story?       @relation("StoryReplies", fields: [storyId], references: [id], onDelete: SetNull)
 
+  envelopes MessageEnvelope[]
   reactions MessageReaction[]
   deletions MessageDeletion[]
 
   @@unique([senderId, clientId])
   @@index([conversationId, createdAt, id])
   @@index([senderId])
+  @@index([senderDeviceId])
   @@index([storyId])
 }
 
@@ -261,7 +385,7 @@ model MessageReaction {
 }
 
 // ==========================================
-// 5. STORIES SYSTEM
+// 6. STORIES SYSTEM
 // ==========================================
 
 enum StoryType {
@@ -309,7 +433,7 @@ model StoryView {
 }
 
 // ==========================================
-// 6. NOTIFICATIONS
+// 7. NOTIFICATIONS
 // ==========================================
 
 enum NotificationType {
@@ -335,6 +459,6 @@ model Notification {
   conversation Conversation? @relation(fields: [conversationId], references: [id], onDelete: Cascade)
 
   @@unique([userId, type, friendshipId])
-  @@index([userId, isRead, createdAt])  
+  @@index([userId, isRead, createdAt])
   @@index([conversationId])
 }

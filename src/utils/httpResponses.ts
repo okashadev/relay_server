@@ -30,3 +30,8 @@ export const forbidden = (res: Response, error = "Forbidden.") =>
 
 export const conflict = (res: Response, error = "Conflict.") =>
   sendError(res, 409, error);
+
+export const tooManyRequests = (
+  res: Response,
+  error = "Too many requests. Please try again later.",
+) => sendError(res, 429, error);

@@ -17,9 +17,11 @@ export const sendVerificationEmail = async (email: string, code: string) => {
             
             <!-- Content Body -->
             <div style="padding: 36px 32px;">
-              <h2 style="color: #1D4533; font-size: 20px; font-weight: 600; margin-top: 0; margin-bottom: 16px;">Verify your email address</h2>
+              <h2 style="color: #1D4533; font-size: 20px; font-weight: 600; margin-top: 0; margin-bottom: 16px;">
+                Verify your email address
+              </h2>
               <p style="color: #4A5568; font-size: 15px; line-height: 1.6; margin-top: 0; margin-bottom: 24px;">
-                Welcome to Relay! Please use the secure verification code below to complete your registration. This code will expire in <strong>15 minutes</strong>.
+                Please use the secure verification code below to verify your email address and complete your request. This code will expire in <strong>15 minutes</strong>.
               </p>
               
               <!-- Code Box -->

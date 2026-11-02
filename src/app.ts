@@ -17,6 +17,8 @@ import blockRouter from "./routes/blockRoutes.js";
 import presenceRouter from "./routes/presenceRoutes.js";
 import groupRouter from "./routes/groupRoutes.js";
 import storyRouter from "./routes/storyRoutes.js";
+import profileRouter from "./routes/profileRoutes.js";
+import mediaRouter from "./routes/mediaRoutes.js";
 
 const app: Express = express();
 
@@ -65,6 +67,8 @@ app.use("/api/blocks", blockRouter);
 app.use("/api/presence", presenceRouter);
 app.use("/api/group", groupRouter);
 app.use("/api/stories", storyRouter);
+app.use("/api/profile", profileRouter);
+app.use("/api/media", mediaRouter);
 
 app.use((_req, res) => {
   res.status(404).json({ success: false, error: "Route not found." });

@@ -11,7 +11,6 @@ import {
   searchQuerySchema,
 } from "../validators/chatValidator.js";
 import { broadcastNewMessage } from "../utils/chat/messageEvents.js";
-import { AuthenticatedRequest } from "../middlewares/authMiddleware.js";
 import { OtherUser } from "../types/conversationTypes.js";
 import {
   buildChatList,
@@ -57,6 +56,7 @@ import {
   MUTE_FOREVER,
   otherUserSelect,
 } from "../utils/chat/chatConstants.js";
+import { AuthenticatedRequest } from "../middlewares/authMiddleware.js";
 
 export const newChat = async (req: AuthenticatedRequest, res: Response) => {
   try {
