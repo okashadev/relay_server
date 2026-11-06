@@ -19,6 +19,7 @@ import groupRouter from "./routes/groupRoutes.js";
 import storyRouter from "./routes/storyRoutes.js";
 import profileRouter from "./routes/profileRoutes.js";
 import mediaRouter from "./routes/mediaRoutes.js";
+import e2eeRouter from "./routes/e2eeRoutes.js";
 
 const app: Express = express();
 
@@ -37,7 +38,7 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   );
   res.on("close", () => {
     if (!res.writableFinished) {
-      console.log(`xx- ${req.method} ${req.originalUrl} connection toot gaya`);
+      console.log(`xx- ${req.method} ${req.originalUrl} connection lost`);
     }
   });
 
@@ -51,7 +52,7 @@ app.use(
     credentials: true,
   }),
 );
-app.use(express.json({ limit: "32kb" }));
+app.use(express.json({ limit: "256kb" }));
 app.use(cookieParser());
 
 app.get("/api/health", (_req, res) => {
@@ -69,6 +70,7 @@ app.use("/api/group", groupRouter);
 app.use("/api/stories", storyRouter);
 app.use("/api/profile", profileRouter);
 app.use("/api/media", mediaRouter);
+app.use("/api/e2ee", e2eeRouter);
 
 app.use((_req, res) => {
   res.status(404).json({ success: false, error: "Route not found." });

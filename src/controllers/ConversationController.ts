@@ -36,12 +36,15 @@ import {
   messageSelect,
   serializeMessage,
 } from "../utils/chat/messages.js";
+import { checkSendEpoch, sendE2eeError } from "../utils/e2ee/keyBundle.js";
+import { persistMessage } from "../utils/chat/persistMessage.js";
 import {
-  isOwnPublicId,
-  sanitizeFileName,
-  VerifiedMedia,
-  verifyChatMedia,
-} from "../utils/chat/chatMedia.js";
+  BLOB_LIMITS,
+  blobUrl,
+  isOwnBlobId,
+  verifyEncryptedBlob,
+  type BlobKind,
+} from "../utils/chat/encryptedMedia.js";
 import {
   getReceipts,
   markRead,
@@ -258,12 +261,16 @@ export const getConversation = async (
           name: true,
           avatar: true,
           description: true,
+          keyEpoch: true,
           lastMessageAt: true,
           createdAt: true,
           createdBy: { select: { id: true, name: true } },
           participants: {
             where: { leftAt: null },
-            select: { role: true, user: { select: otherUserSelect } },
+            select: {
+              role: true,
+              user: { select: { ...otherUserSelect } },
+            },
             orderBy: { joinedAt: "asc" },
             take: MAX_MEMBERS,
           },
@@ -307,6 +314,7 @@ export const getConversation = async (
           name: conversation.name ?? "Group",
           avatar: conversation.avatar,
           description: conversation.description,
+          keyEpoch: conversation.keyEpoch,
           createdAt: conversation.createdAt,
           createdBy: conversation.createdBy,
           myRole: mine.role,
@@ -355,6 +363,7 @@ export const getConversation = async (
         id: conversation.id,
         type: "DIRECT" as const,
         lastMessageAt: conversation.lastMessageAt,
+        keyEpoch: conversation.keyEpoch,
         createdAt: conversation.createdAt,
         otherUser,
         me,
@@ -510,14 +519,47 @@ export const sendMessage = async (req: AuthenticatedRequest, res: Response) => {
       }
     }
 
-    let media: VerifiedMedia | null = null;
+    if (input.replyToId) {
+      const reply = await db.message.findFirst({
+        where: {
+          id: input.replyToId,
+          conversationId,
+          deletedAt: null,
+          deletions: { none: { userId } },
+          ...(participant.clearedAt
+            ? { createdAt: { gt: participant.clearedAt } }
+            : {}),
+        },
+        select: { id: true },
+      });
 
-    if (input.type !== "TEXT") {
-      if (!isOwnPublicId(input.publicId, userId, input.type)) {
+      if (!reply)
+        return badRequest(
+          res,
+          "The message you're replying to isn't available.",
+        );
+    }
+
+    let media: {
+      url: string;
+      size: number;
+      thumbnailUrl: string | null;
+    } | null = null;
+
+    if (input.media) {
+      const { publicId, thumbnailPublicId } = input.media;
+
+      if (
+        !isOwnBlobId(publicId, userId) ||
+        (thumbnailPublicId && !isOwnBlobId(thumbnailPublicId, userId))
+      ) {
         return badRequest(res, "Invalid media reference.");
       }
 
-      const check = await verifyChatMedia(input.type, input.publicId);
+      const check = await verifyEncryptedBlob(
+        publicId,
+        BLOB_LIMITS[input.type as BlobKind],
+      );
 
       if (!check.ok) {
         return res
@@ -525,58 +567,44 @@ export const sendMessage = async (req: AuthenticatedRequest, res: Response) => {
           .json({ success: false, error: check.error });
       }
 
-      media = check.media;
+      media = {
+        url: check.url,
+        size: check.size,
+        thumbnailUrl: thumbnailPublicId ? blobUrl(thumbnailPublicId) : null,
+      };
     }
-
-    const data: Prisma.MessageUncheckedCreateInput = {
-      conversationId,
-      senderId: userId,
-      clientId: input.clientId,
-      type: input.type,
-      content: input.type === "VOICE" ? null : input.content || null,
-      replyToId: input.replyToId ?? null,
-      fileName: input.type === "FILE" ? sanitizeFileName(input.fileName) : null,
-      ...(media && {
-        mediaUrl: media.url,
-        thumbnailUrl: media.thumbnailUrl,
-        mediaMimeType: media.mimeType,
-        mediaSize: media.size,
-        mediaWidth: media.width,
-        mediaHeight: media.height,
-        mediaDuration: media.duration,
-      }),
-    };
 
     let message: MessageRow;
 
     try {
-      message = await db.$transaction(async (tx) => {
-        const created = await tx.message.create({
-          data,
-          select: messageSelect,
-        });
-
-        await tx.conversation.updateMany({
-          where: {
-            id: conversationId,
-            lastMessageAt: { lt: created.createdAt },
-          },
-          data: { lastMessageAt: created.createdAt },
-        });
-
-        await tx.$executeRaw`
-          UPDATE "ConversationParticipant" cp
-          SET "lastReadAt" = m."createdAt", "lastDeliveredAt" = m."createdAt"
-          FROM "Message" m
-          WHERE m."id" = ${created.id}
-            AND cp."conversationId" = m."conversationId"
-            AND cp."userId" = ${userId}
-            AND (cp."lastReadAt" IS NULL OR cp."lastReadAt" < m."createdAt")
-        `;
-
-        return created;
-      });
+      message = await persistMessage(
+        {
+          conversationId,
+          senderId: userId,
+          clientId: input.clientId,
+          type: input.type,
+          ciphertext: input.ciphertext,
+          keyEpoch: input.keyEpoch,
+          replyToId: input.replyToId ?? null,
+          ...(media && {
+            mediaUrl: media.url,
+            thumbnailUrl: media.thumbnailUrl,
+            mediaSize: media.size,
+          }),
+        },
+        conversationId,
+        userId,
+        (tx) =>
+          checkSendEpoch(tx, {
+            conversationId,
+            actorId: userId,
+            deviceId: input.deviceId,
+            keyEpoch: input.keyEpoch,
+            keyBundle: input.keyBundle,
+          }),
+      );
     } catch (error: any) {
+      if (sendE2eeError(res, error)) return;
       if (error?.code !== "P2002") throw error;
 
       const winner = await db.message.findFirst({

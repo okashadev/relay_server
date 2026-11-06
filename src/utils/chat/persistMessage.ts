@@ -6,8 +6,11 @@ export const persistMessage = (
   data: Prisma.MessageUncheckedCreateInput,
   conversationId: string,
   userId: string,
+  prepare?: (tx: Prisma.TransactionClient) => Promise<void>,
 ) =>
   db.$transaction(async (tx) => {
+    if (prepare) await prepare(tx);
+
     const created = await tx.message.create({ data, select: messageSelect });
 
     await tx.conversation.updateMany({

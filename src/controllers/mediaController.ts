@@ -21,13 +21,10 @@ type MediaRow = {
   senderId: string | null;
   type: "IMAGE" | "VIDEO" | "FILE";
   mediaUrl: string;
+  ciphertext: string | null;
+  keyEpoch: number | null;
   thumbnailUrl: string | null;
-  mediaMimeType: string | null;
-  fileName: string | null;
   mediaSize: number | null;
-  mediaWidth: number | null;
-  mediaHeight: number | null;
-  mediaDuration: number | null;
   createdAt: Date;
   conversationType: ChatType;
   groupName: string | null;
@@ -46,7 +43,11 @@ type SummaryRow = {
   bytes: number;
 };
 
-const chatName = (type: ChatType, groupName: string | null, otherName: string | null) =>
+const chatName = (
+  type: ChatType,
+  groupName: string | null,
+  otherName: string | null,
+) =>
   type === "DIRECT" ? (otherName ?? "Deleted user") : (groupName ?? "Group");
 
 export const getMedia = async (req: AuthenticatedRequest, res: Response) => {
@@ -74,12 +75,10 @@ export const getMedia = async (req: AuthenticatedRequest, res: Response) => {
 
     const rows = await db.$queryRaw<MediaRow[]>`
       SELECT
-        m."id", m."conversationId", m."senderId", m."type",
-        m."mediaUrl", m."thumbnailUrl", m."mediaMimeType", m."fileName",
+         m."id", m."conversationId", m."senderId", m."type",
+        m."mediaUrl", m."thumbnailUrl",
         m."mediaSize"::int AS "mediaSize",
-        m."mediaWidth"::int AS "mediaWidth",
-        m."mediaHeight"::int AS "mediaHeight",
-        m."mediaDuration"::int AS "mediaDuration",
+        m."ciphertext", m."keyEpoch",
         m."createdAt",
         c."type" AS "conversationType",
         c."name" AS "groupName",
@@ -112,15 +111,13 @@ export const getMedia = async (req: AuthenticatedRequest, res: Response) => {
         type: row.type,
         mediaUrl: row.mediaUrl,
         thumbnailUrl: row.thumbnailUrl,
-        mediaMimeType: row.mediaMimeType ?? "",
-        fileName: row.fileName,
         mediaSize: row.mediaSize ?? 0,
-        mediaWidth: row.mediaWidth,
-        mediaHeight: row.mediaHeight,
-        mediaDuration: row.mediaDuration,
+        ciphertext: row.ciphertext,
+        keyEpoch: row.keyEpoch,
         createdAt: row.createdAt,
       })),
-      nextCursor: hasMore && oldest ? encodeCursor(oldest.createdAt, oldest.id) : null,
+      nextCursor:
+        hasMore && oldest ? encodeCursor(oldest.createdAt, oldest.id) : null,
     });
   } catch (error: any) {
     console.error("Get Media Error:", error);
@@ -128,7 +125,10 @@ export const getMedia = async (req: AuthenticatedRequest, res: Response) => {
   }
 };
 
-export const getMediaSummary = async (req: AuthenticatedRequest, res: Response) => {
+export const getMediaSummary = async (
+  req: AuthenticatedRequest,
+  res: Response,
+) => {
   try {
     const userId = getUserId(req);
     if (!userId) return unauthorized(res);

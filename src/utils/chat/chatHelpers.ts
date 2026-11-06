@@ -163,14 +163,15 @@ export const buildChatList = async (userId: string, q: string | null) => {
         cp."conversationId",
         lm."type",
         lm."content",
-        lm."fileName",
+        lm."ciphertext",
+        lm."keyEpoch",
         lm."senderId",
         lm."deletedAt",
         lm."createdAt",
         sender."name" AS "senderName"
       FROM "ConversationParticipant" cp
       JOIN LATERAL (
-        SELECT m."type", m."content", m."fileName", m."senderId",
+        SELECT m."type", m."content", m."ciphertext", m."keyEpoch", m."senderId",
                m."deletedAt", m."createdAt"
         FROM "Message" m
         WHERE m."conversationId" = cp."conversationId"
@@ -243,8 +244,9 @@ export const buildChatList = async (userId: string, q: string | null) => {
       lastMessage: row
         ? {
             type: row.type,
-            content: deleted ? null : truncate(row.content),
-            fileName: deleted ? null : row.fileName,
+            content: deleted ? null : isSystem ? truncate(row.content) : null,
+            ciphertext: deleted ? null : row.ciphertext,
+            keyEpoch: deleted ? null : row.keyEpoch,
             senderName: isMine || isSystem ? null : row.senderName,
             isMine,
             deleted,

@@ -26,7 +26,8 @@ export type LastMessageRow = {
   conversationId: string;
   type: MessageType;
   content: string | null;
-  fileName: string | null;
+  ciphertext: string | null;
+  keyEpoch: number | null;
   senderId: string | null;
   senderName: string | null;
   deletedAt: Date | null;

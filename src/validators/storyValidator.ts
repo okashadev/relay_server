@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { b64, keyBundleSchema } from "../utils/e2ee/keyBundle.js";
 
 const publicId = z.string().min(1).max(200);
 const mediaCaption = z
@@ -36,9 +37,8 @@ export const createStorySchema = z.discriminatedUnion("type", [
 
 export const storyReplySchema = z.object({
   clientId: z.uuid("Invalid client id."),
-  content: z
-    .string()
-    .trim()
-    .min(1, "Reply can't be empty.")
-    .max(500, "Reply is too long."),
+  ciphertext: b64(8000),
+  keyEpoch: z.number().int().min(1),
+  keyBundle: keyBundleSchema.optional(),
+  deviceId: z.uuid("Invalid device id."),
 });

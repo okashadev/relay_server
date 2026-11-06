@@ -33,13 +33,17 @@ export const generateAccessToken = (user: { id: string; email: string }) => {
 export const hashToken = (token: string) =>
   crypto.createHash("sha256").update(token).digest("hex");
 
-export const createRefreshToken = async (userId: string) => {
+export const createRefreshToken = async (
+  userId: string,
+  deviceId: string | null = null,
+) => {
   const rawToken = crypto.randomBytes(64).toString("hex");
 
   await db.refreshToken.create({
     data: {
       token: hashToken(rawToken),
       userId,
+      deviceId,
       expiresAt: new Date(Date.now() + REFRESH_MAX_AGE),
     },
   });

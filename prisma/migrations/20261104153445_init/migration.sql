@@ -5,9 +5,6 @@ CREATE TYPE "UserStatus" AS ENUM ('ONLINE', 'OFFLINE');
 CREATE TYPE "AuthProvider" AS ENUM ('LOCAL', 'GOOGLE');
 
 -- CreateEnum
-CREATE TYPE "EnvelopeKind" AS ENUM ('MESSAGE', 'EDIT', 'SENDER_KEY');
-
--- CreateEnum
 CREATE TYPE "FriendStatus" AS ENUM ('PENDING', 'ACCEPTED');
 
 -- CreateEnum
@@ -45,6 +42,7 @@ CREATE TABLE "User" (
     "verificationLastSentAt" TIMESTAMP(3),
     "pendingEmail" TEXT,
     "pendingEmailRequestedAt" TIMESTAMP(3),
+    "accountPublicKey" TEXT,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
 
@@ -67,14 +65,16 @@ CREATE TABLE "RefreshToken" (
 CREATE TABLE "Device" (
     "id" TEXT NOT NULL,
     "userId" TEXT NOT NULL,
-    "registrationId" INTEGER NOT NULL,
     "name" TEXT NOT NULL,
     "platform" TEXT,
-    "identityKey" TEXT NOT NULL,
-    "signedPreKeyId" INTEGER NOT NULL,
-    "signedPreKey" TEXT NOT NULL,
-    "signedPreKeySignature" TEXT NOT NULL,
-    "signedPreKeyAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "browser" TEXT,
+    "os" TEXT,
+    "deviceModel" TEXT,
+    "appVersion" TEXT,
+    "userAgent" TEXT,
+    "ip" TEXT,
+    "publicKey" TEXT,
+    "keyRegisteredAt" TIMESTAMP(3),
     "lastActiveAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "revokedAt" TIMESTAMP(3),
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -83,44 +83,27 @@ CREATE TABLE "Device" (
 );
 
 -- CreateTable
-CREATE TABLE "OneTimePreKey" (
+CREATE TABLE "ConversationDeviceKey" (
     "id" TEXT NOT NULL,
-    "deviceId" TEXT NOT NULL,
-    "keyId" INTEGER NOT NULL,
-    "publicKey" TEXT NOT NULL,
-    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
-    CONSTRAINT "OneTimePreKey_pkey" PRIMARY KEY ("id")
-);
-
--- CreateTable
-CREATE TABLE "KyberPreKey" (
-    "id" TEXT NOT NULL,
-    "deviceId" TEXT NOT NULL,
-    "keyId" INTEGER NOT NULL,
-    "publicKey" TEXT NOT NULL,
-    "signature" TEXT NOT NULL,
-    "isLastResort" BOOLEAN NOT NULL DEFAULT false,
-    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
-    CONSTRAINT "KyberPreKey_pkey" PRIMARY KEY ("id")
-);
-
--- CreateTable
-CREATE TABLE "MessageEnvelope" (
-    "id" TEXT NOT NULL,
-    "recipientDeviceId" TEXT NOT NULL,
-    "senderDeviceId" TEXT,
     "conversationId" TEXT NOT NULL,
-    "messageId" TEXT,
-    "kind" "EnvelopeKind" NOT NULL DEFAULT 'MESSAGE',
-    "revision" INTEGER NOT NULL DEFAULT 0,
-    "ciphertextType" INTEGER NOT NULL,
-    "ciphertext" TEXT NOT NULL,
-    "acknowledgedAt" TIMESTAMP(3),
+    "deviceId" TEXT NOT NULL,
+    "epoch" INTEGER NOT NULL,
+    "wrappedKey" TEXT NOT NULL,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
-    CONSTRAINT "MessageEnvelope_pkey" PRIMARY KEY ("id")
+    CONSTRAINT "ConversationDeviceKey_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "ConversationAccountKey" (
+    "id" TEXT NOT NULL,
+    "conversationId" TEXT NOT NULL,
+    "userId" TEXT NOT NULL,
+    "epoch" INTEGER NOT NULL,
+    "wrappedKey" TEXT NOT NULL,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "ConversationAccountKey_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
@@ -172,7 +155,8 @@ CREATE TABLE "Conversation" (
     "avatar" TEXT,
     "description" TEXT,
     "createdById" TEXT,
-    "membershipVersion" INTEGER NOT NULL DEFAULT 0,
+    "keyEpoch" INTEGER NOT NULL DEFAULT 0,
+    "rekeyRequired" BOOLEAN NOT NULL DEFAULT false,
     "lastMessageAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
@@ -203,9 +187,10 @@ CREATE TABLE "Message" (
     "id" TEXT NOT NULL,
     "conversationId" TEXT NOT NULL,
     "senderId" TEXT,
-    "senderDeviceId" TEXT,
     "type" "MessageType" NOT NULL DEFAULT 'TEXT',
     "content" TEXT,
+    "ciphertext" TEXT,
+    "keyEpoch" INTEGER,
     "mediaUrl" TEXT,
     "thumbnailUrl" TEXT,
     "mediaSize" INTEGER,
@@ -307,34 +292,16 @@ CREATE INDEX "RefreshToken_expiresAt_idx" ON "RefreshToken"("expiresAt");
 CREATE INDEX "Device_userId_revokedAt_idx" ON "Device"("userId", "revokedAt");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "Device_userId_registrationId_key" ON "Device"("userId", "registrationId");
+CREATE INDEX "ConversationDeviceKey_deviceId_idx" ON "ConversationDeviceKey"("deviceId");
 
 -- CreateIndex
-CREATE INDEX "OneTimePreKey_deviceId_idx" ON "OneTimePreKey"("deviceId");
+CREATE UNIQUE INDEX "ConversationDeviceKey_conversationId_deviceId_epoch_key" ON "ConversationDeviceKey"("conversationId", "deviceId", "epoch");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "OneTimePreKey_deviceId_keyId_key" ON "OneTimePreKey"("deviceId", "keyId");
+CREATE INDEX "ConversationAccountKey_userId_idx" ON "ConversationAccountKey"("userId");
 
 -- CreateIndex
-CREATE INDEX "KyberPreKey_deviceId_isLastResort_idx" ON "KyberPreKey"("deviceId", "isLastResort");
-
--- CreateIndex
-CREATE UNIQUE INDEX "KyberPreKey_deviceId_keyId_key" ON "KyberPreKey"("deviceId", "keyId");
-
--- CreateIndex
-CREATE INDEX "MessageEnvelope_recipientDeviceId_createdAt_id_idx" ON "MessageEnvelope"("recipientDeviceId", "createdAt", "id");
-
--- CreateIndex
-CREATE INDEX "MessageEnvelope_recipientDeviceId_acknowledgedAt_idx" ON "MessageEnvelope"("recipientDeviceId", "acknowledgedAt");
-
--- CreateIndex
-CREATE INDEX "MessageEnvelope_messageId_idx" ON "MessageEnvelope"("messageId");
-
--- CreateIndex
-CREATE INDEX "MessageEnvelope_conversationId_idx" ON "MessageEnvelope"("conversationId");
-
--- CreateIndex
-CREATE UNIQUE INDEX "MessageEnvelope_messageId_recipientDeviceId_kind_revision_key" ON "MessageEnvelope"("messageId", "recipientDeviceId", "kind", "revision");
+CREATE UNIQUE INDEX "ConversationAccountKey_conversationId_userId_epoch_key" ON "ConversationAccountKey"("conversationId", "userId", "epoch");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "KeyBackup_userId_key" ON "KeyBackup"("userId");
@@ -368,9 +335,6 @@ CREATE INDEX "Message_conversationId_createdAt_id_idx" ON "Message"("conversatio
 
 -- CreateIndex
 CREATE INDEX "Message_senderId_idx" ON "Message"("senderId");
-
--- CreateIndex
-CREATE INDEX "Message_senderDeviceId_idx" ON "Message"("senderDeviceId");
 
 -- CreateIndex
 CREATE INDEX "Message_storyId_idx" ON "Message"("storyId");
@@ -412,22 +376,16 @@ ALTER TABLE "RefreshToken" ADD CONSTRAINT "RefreshToken_deviceId_fkey" FOREIGN K
 ALTER TABLE "Device" ADD CONSTRAINT "Device_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "OneTimePreKey" ADD CONSTRAINT "OneTimePreKey_deviceId_fkey" FOREIGN KEY ("deviceId") REFERENCES "Device"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE "ConversationDeviceKey" ADD CONSTRAINT "ConversationDeviceKey_conversationId_fkey" FOREIGN KEY ("conversationId") REFERENCES "Conversation"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "KyberPreKey" ADD CONSTRAINT "KyberPreKey_deviceId_fkey" FOREIGN KEY ("deviceId") REFERENCES "Device"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE "ConversationDeviceKey" ADD CONSTRAINT "ConversationDeviceKey_deviceId_fkey" FOREIGN KEY ("deviceId") REFERENCES "Device"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "MessageEnvelope" ADD CONSTRAINT "MessageEnvelope_recipientDeviceId_fkey" FOREIGN KEY ("recipientDeviceId") REFERENCES "Device"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE "ConversationAccountKey" ADD CONSTRAINT "ConversationAccountKey_conversationId_fkey" FOREIGN KEY ("conversationId") REFERENCES "Conversation"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "MessageEnvelope" ADD CONSTRAINT "MessageEnvelope_senderDeviceId_fkey" FOREIGN KEY ("senderDeviceId") REFERENCES "Device"("id") ON DELETE SET NULL ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE "MessageEnvelope" ADD CONSTRAINT "MessageEnvelope_conversationId_fkey" FOREIGN KEY ("conversationId") REFERENCES "Conversation"("id") ON DELETE CASCADE ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE "MessageEnvelope" ADD CONSTRAINT "MessageEnvelope_messageId_fkey" FOREIGN KEY ("messageId") REFERENCES "Message"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE "ConversationAccountKey" ADD CONSTRAINT "ConversationAccountKey_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "KeyBackup" ADD CONSTRAINT "KeyBackup_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
@@ -458,9 +416,6 @@ ALTER TABLE "Message" ADD CONSTRAINT "Message_conversationId_fkey" FOREIGN KEY (
 
 -- AddForeignKey
 ALTER TABLE "Message" ADD CONSTRAINT "Message_senderId_fkey" FOREIGN KEY ("senderId") REFERENCES "User"("id") ON DELETE SET NULL ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE "Message" ADD CONSTRAINT "Message_senderDeviceId_fkey" FOREIGN KEY ("senderDeviceId") REFERENCES "Device"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "Message" ADD CONSTRAINT "Message_replyToId_fkey" FOREIGN KEY ("replyToId") REFERENCES "Message"("id") ON DELETE SET NULL ON UPDATE CASCADE;

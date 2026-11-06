@@ -16,6 +16,11 @@ import {
   verifyEmailChange,
   resendCode,
 } from "../controllers/accountController.js";
+import {
+  listDevices,
+  revokeDevice,
+  revokeOtherDevices,
+} from "../controllers/deviceController.js";
 // import { googleAuthLimiter, loginLimiter, refreshLimiter, registerLimiter, resendCodeLimiter, verifyEmailLimiter } from "../middlewares/rateLimiters.js";
 
 const authRouter = Router();
@@ -29,6 +34,10 @@ authRouter.post("/resend-code", resendVerificationCode);
 
 authRouter.post("/refresh", refresh);
 authRouter.post("/logout", logout);
+
+authRouter.get("/devices", verifyAuth, listDevices);
+authRouter.delete("/devices/:id", verifyAuth, revokeDevice);
+authRouter.post("/devices/revoke-others", verifyAuth, revokeOtherDevices);
 
 authRouter.patch("/password", verifyAuth, changePassword);
 authRouter.get("/email-available", verifyAuth, checkEmail);

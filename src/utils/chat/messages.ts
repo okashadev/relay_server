@@ -14,20 +14,17 @@ export const messageSelect = {
   sender: { select: messageSenderSelect },
   type: true,
   content: true,
+  ciphertext: true,
+  keyEpoch: true,
   mediaUrl: true,
   thumbnailUrl: true,
-  mediaMimeType: true,
-  fileName: true,
   mediaSize: true,
-  mediaWidth: true,
-  mediaHeight: true,
-  mediaDuration: true,
   replyTo: {
     select: {
       id: true,
       type: true,
-      fileName: true,
-      content: true,
+      ciphertext: true,
+      keyEpoch: true,
       createdAt: true,
       deletedAt: true,
       sender: { select: { name: true } },
@@ -51,18 +48,13 @@ export const messageSelect = {
   createdAt: true,
 } satisfies Prisma.MessageSelect;
 
-export type MessageRow = Prisma.MessageGetPayload<{
-  select: typeof messageSelect;
-}>;
+export type MessageRow = Prisma.MessageGetPayload<{ select: typeof messageSelect }>;
 
 const summarizeReactions = (
   reactions: { emoji: string; userId: string }[],
   viewerId: string,
 ) => {
-  const byEmoji = new Map<
-    string,
-    { emoji: string; count: number; reactedByMe: boolean }
-  >();
+  const byEmoji = new Map<string, { emoji: string; count: number; reactedByMe: boolean }>();
 
   for (const reaction of reactions) {
     const entry = byEmoji.get(reaction.emoji) ?? {
@@ -89,10 +81,9 @@ export const serializeMessage = (
   const isDeleted = message.deletedAt !== null;
   const reply = message.replyTo;
 
-  const hideReplyContent =
+  const hideReply =
     reply !== null &&
-    (reply.deletedAt !== null ||
-      (clearedAt !== null && reply.createdAt <= clearedAt));
+    (reply.deletedAt !== null || (clearedAt !== null && reply.createdAt <= clearedAt));
 
   const story = message.story;
   const storyAvailable =
@@ -105,21 +96,18 @@ export const serializeMessage = (
     sender: message.sender,
     type: message.type,
     content: isDeleted ? null : message.content,
+    ciphertext: isDeleted ? null : message.ciphertext,
+    keyEpoch: isDeleted ? null : message.keyEpoch,
     mediaUrl: isDeleted ? null : message.mediaUrl,
     thumbnailUrl: isDeleted ? null : message.thumbnailUrl,
-    mediaMimeType: isDeleted ? null : message.mediaMimeType,
-    fileName: isDeleted ? null : message.fileName,
     mediaSize: isDeleted ? null : message.mediaSize,
-    mediaWidth: isDeleted ? null : message.mediaWidth,
-    mediaHeight: isDeleted ? null : message.mediaHeight,
-    mediaDuration: isDeleted ? null : message.mediaDuration,
     replyTo:
       reply && !isDeleted
         ? {
             id: reply.id,
             type: reply.type,
-            fileName: hideReplyContent ? null : reply.fileName,
-            content: hideReplyContent ? null : reply.content,
+            ciphertext: hideReply ? null : reply.ciphertext,
+            keyEpoch: hideReply ? null : reply.keyEpoch,
             senderName: reply.sender?.name ?? null,
             deleted: reply.deletedAt !== null,
           }

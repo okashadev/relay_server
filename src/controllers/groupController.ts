@@ -47,6 +47,7 @@ import {
   signAvatarSchema,
   updateGroupSchema,
 } from "../validators/groupValidator.js";
+import { E2eeError, markRekeyRequired } from "../utils/e2ee/keyBundle.js";
 
 const deny = (res: Response, access: Extract<GroupAccess, { ok: false }>) =>
   res.status(access.status).json({ success: false, error: access.error });
@@ -110,6 +111,12 @@ const createGroupNotifications = async (
 };
 
 const conflictOrServerError = (res: Response, error: any, label: string) => {
+  if (error instanceof E2eeError) {
+    return res
+      .status(error.status)
+      .json({ success: false, error: error.message, code: error.code });
+  }
+
   if (error?.message === "GROUP_CONFLICT" || error?.code === "P2002") {
     return conflict(
       res,
@@ -167,7 +174,6 @@ export const createGroup = async (req: AuthenticatedRequest, res: Response) => {
 
       const names = await nameMap(tx, [userId]);
 
-      // Chat list sirf wohi chat dikhati hai jis mein message ho, isliye ye zaroori hai
       const message = await createSystemMessage(tx, {
         conversationId: group.id,
         actorId: userId,
@@ -249,7 +255,6 @@ export const addMembers = async (req: AuthenticatedRequest, res: Response) => {
         return { error: "FULL" as const };
       }
 
-      // Naye (ya wapas aaye) member purani history nahi dekhte, aur unka unread aur ticks us waqt se
       const lastAt = await latestMessageAt(tx, conversationId);
       const history = {
         clearedAt: lastAt,
@@ -395,6 +400,7 @@ export const removeMember = async (
 
       if (removed.count === 0) throw new Error("GROUP_CONFLICT");
 
+      await markRekeyRequired(tx, conversationId);
       return { error: null, message };
     });
 
@@ -464,6 +470,8 @@ export const leaveGroup = async (req: AuthenticatedRequest, res: Response) => {
       });
 
       if (left.count === 0) throw new Error("GROUP_CONFLICT");
+
+      await markRekeyRequired(tx, conversationId);
 
       return { message };
     });

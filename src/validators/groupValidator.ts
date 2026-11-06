@@ -10,7 +10,10 @@ const name = z
   .string()
   .trim()
   .min(1, "Group name is required.")
-  .max(MAX_NAME_LENGTH, `Group name cannot exceed ${MAX_NAME_LENGTH} characters.`);
+  .max(
+    MAX_NAME_LENGTH,
+    `Group name cannot exceed ${MAX_NAME_LENGTH} characters.`,
+  );
 
 const description = z
   .string()
@@ -42,7 +45,10 @@ export const addMembersSchema = z.object({
   memberIds: z
     .array(z.uuid("Invalid user id."))
     .min(1, "Select at least one friend to add.")
-    .max(MAX_ADD_AT_ONCE, `You can add up to ${MAX_ADD_AT_ONCE} people at once.`),
+    .max(
+      MAX_ADD_AT_ONCE,
+      `You can add up to ${MAX_ADD_AT_ONCE} people at once.`,
+    ),
 });
 
 export const updateGroupSchema = z

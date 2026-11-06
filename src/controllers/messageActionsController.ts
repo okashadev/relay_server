@@ -41,6 +41,7 @@ export const editMessage = async (req: AuthenticatedRequest, res: Response) => {
     if (!bodyResult.success) return validationError(res, bodyResult.error);
 
     const { id: conversationId, messageId } = paramsResult.data;
+    const { ciphertext, keyEpoch } = bodyResult.data;
 
     const access = await getChatAccess(userId, conversationId);
     if (!access.ok) return denyAccess(res, access);
@@ -66,24 +67,13 @@ export const editMessage = async (req: AuthenticatedRequest, res: Response) => {
       );
     }
 
-    const content = bodyResult.data.content;
-
-    if (message.type === "TEXT" && content === "") {
-      return badRequest(res, "Message can't be empty.");
-    }
-
-    const nextContent = content === "" ? null : content;
-
-    if (nextContent === message.content) {
-      return res.status(200).json({
-        success: true,
-        message: serializeMessage(message, userId, access.clearedAt),
-      });
+    if (keyEpoch !== message.keyEpoch) {
+      return badRequest(res, "Edits must use the message's original key.");
     }
 
     const updated = await db.message.update({
       where: { id: messageId },
-      data: { content: nextContent, editedAt: new Date() },
+      data: { ciphertext, keyEpoch, editedAt: new Date() },
       select: messageSelect,
     });
 
@@ -182,6 +172,7 @@ export const deleteMessage = async (
     }
 
     const mediaUrl = message.mediaUrl;
+    const thumbnailUrl = message.thumbnailUrl;
 
     const deleted = await db.$transaction(async (tx) => {
       await tx.messageReaction.deleteMany({ where: { messageId } });
@@ -191,18 +182,18 @@ export const deleteMessage = async (
         data: {
           deletedAt: new Date(),
           content: null,
+          ciphertext: null,
+          keyEpoch: null,
           mediaUrl: null,
           thumbnailUrl: null,
-          mediaMimeType: null,
-          fileName: null,
           mediaSize: null,
-          mediaWidth: null,
-          mediaHeight: null,
-          mediaDuration: null,
         },
         select: messageSelect,
       });
     });
+
+    if (mediaUrl) void cleanupMedia(mediaUrl, userId, messageId);
+    if (thumbnailUrl) void deleteChatMedia(thumbnailUrl, userId);
 
     res.status(200).json({
       success: true,

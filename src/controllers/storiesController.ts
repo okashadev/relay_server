@@ -41,6 +41,7 @@ import {
   storyOwnerSelect,
   storySelect,
 } from "../utils/stories/storyHelpers.js";
+import { checkSendEpoch, sendE2eeError } from "../utils/e2ee/keyBundle.js";
 
 const activeWhere = (now: Date): Prisma.StoryWhereInput => ({
   expiresAt: { gt: now },
@@ -401,7 +402,8 @@ export const replyToStory = async (
     if (!bodyResult.success) return validationError(res, bodyResult.error);
 
     const { id: storyId } = paramsResult.data;
-    const { clientId, content } = bodyResult.data;
+    const { clientId, ciphertext, keyEpoch, keyBundle, deviceId } =
+      bodyResult.data;
 
     const existing = await db.message.findFirst({
       where: { senderId: userId, clientId },
@@ -445,13 +447,23 @@ export const replyToStory = async (
           senderId: userId,
           clientId,
           type: "TEXT",
-          content,
+          ciphertext,
+          keyEpoch,
           storyId: story.id,
         },
         conversationId,
         userId,
+        (tx) =>
+          checkSendEpoch(tx, {
+            conversationId,
+            actorId: userId,
+            deviceId,
+            keyEpoch,
+            keyBundle,
+          }),
       );
     } catch (error: any) {
+      if (sendE2eeError(res, error)) return;
       if (error?.code !== "P2002") throw error;
 
       const winner = await db.message.findFirst({

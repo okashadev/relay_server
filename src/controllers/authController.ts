@@ -24,7 +24,8 @@ import {
   VERIFICATION_CODE_TTL_MS,
   RESEND_COOLDOWN_MS,
 } from "../utils/generateVerificationCode.js";
-import { authUserSelect } from "../utils/auth/authUser.js";
+import { authUserSelect, toAuthUser } from "../utils/auth/authUser.js";
+import { registerDevice } from "../utils/auth/devices.js";
 import { hashPassword } from "../utils/auth/password.js";
 import { validationError } from "../utils/httpResponses.js";
 
@@ -217,24 +218,17 @@ export const login = async (req: Request, res: Response) => {
       });
     }
 
+    const device = await registerDevice(user.id, req);
     const accessToken = generateAccessToken(user);
-    const refreshToken = await createRefreshToken(user.id);
+    const refreshToken = await createRefreshToken(user.id, device.id);
     setRefreshCookie(res, refreshToken);
 
     return res.status(200).json({
       success: true,
       message: "Login successful!",
       token: accessToken,
-      user: {
-        id: user.id,
-        name: user.name,
-        username: user.username,
-        avatar: user.avatar,
-        bio: user.bio,
-        email: user.email,
-        isEmailVerified: user.isEmailVerified,
-        provider: user.provider,
-      },
+      deviceId: device.id,
+      user: toAuthUser(user),
     });
   } catch (error: any) {
     console.error("Login Error:", error);
@@ -339,24 +333,17 @@ export const googleAuth = async (req: Request, res: Response) => {
       });
     }
 
+    const device = await registerDevice(user.id, req);
     const accessToken = generateAccessToken(user);
-    const refreshToken = await createRefreshToken(user.id);
+    const refreshToken = await createRefreshToken(user.id, device.id);
     setRefreshCookie(res, refreshToken);
 
     return res.status(200).json({
       success: true,
       message: "Google Authentication successful",
       token: accessToken,
-      user: {
-        id: user.id,
-        email: user.email,
-        name: user.name,
-        username: user.username,
-        avatar: user.avatar,
-        bio: user.bio,
-        isEmailVerified: user.isEmailVerified,
-        provider: user.provider,
-      },
+      deviceId: device.id,
+      user: toAuthUser(user),
     });
   } catch (error: any) {
     console.error("Google Login Error:", error);
@@ -385,6 +372,11 @@ export const refresh = async (req: Request, res: Response) => {
       },
       include: {
         user: true,
+        device: {
+          select: {
+            revokedAt: true,
+          },
+        },
       },
     });
 
@@ -405,6 +397,14 @@ export const refresh = async (req: Request, res: Response) => {
       });
     }
 
+    if (stored.device?.revokedAt) {
+      await db.refreshToken.deleteMany({ where: { id: stored.id } });
+      clearRefreshCookie(res);
+      return res
+        .status(401)
+        .json({ success: false, error: "This device was signed out." });
+    }
+
     const deleted = await db.refreshToken.deleteMany({
       where: {
         id: stored.id,
@@ -418,24 +418,28 @@ export const refresh = async (req: Request, res: Response) => {
       });
     }
 
-    const newRefreshToken = await createRefreshToken(stored.userId);
+    const newRefreshToken = await createRefreshToken(
+      stored.userId,
+      stored.deviceId,
+    );
     const accessToken = generateAccessToken(stored.user);
+
+    if (stored.deviceId) {
+      void db.device
+        .updateMany({
+          where: { id: stored.deviceId },
+          data: { lastActiveAt: new Date(), ip: req.ip?.slice(0, 64) ?? null },
+        })
+        .catch(() => undefined);
+    }
 
     setRefreshCookie(res, newRefreshToken);
 
     return res.status(200).json({
       success: true,
       token: accessToken,
-      user: {
-        id: stored.user.id,
-        name: stored.user.name,
-        username: stored.user.username,
-        email: stored.user.email,
-        avatar: stored.user.avatar,
-        bio: stored.user.bio,
-        isEmailVerified: stored.user.isEmailVerified,
-        provider: stored.user.provider,
-      },
+      deviceId: stored.deviceId,
+      user: toAuthUser(stored.user),
     });
   } catch (error: any) {
     console.error("Refresh Error:", error);
@@ -537,14 +541,16 @@ export const verifyEmail = async (req: Request, res: Response) => {
       select: authUserSelect,
     });
 
+    const device = await registerDevice(verifiedUser.id, req);
     const accessToken = generateAccessToken(verifiedUser);
-    const refreshToken = await createRefreshToken(verifiedUser.id);
+    const refreshToken = await createRefreshToken(verifiedUser.id, device.id);
     setRefreshCookie(res, refreshToken);
 
     return res.status(200).json({
       success: true,
       message: "Email verified successfully.",
       token: accessToken,
+      deviceId: device.id,
       user: verifiedUser,
     });
   } catch (error: any) {

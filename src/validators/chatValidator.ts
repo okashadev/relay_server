@@ -1,8 +1,10 @@
 import z from "zod";
+import { b64, keyBundleSchema } from "../utils/e2ee/keyBundle.js";
 
 const CURSOR_PATTERN =
   /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z_[0-9a-f-]{36}$/i;
 
+const CIPHERTEXT_MAX = 26_000;
 const clientId = z.uuid("Invalid client id.");
 const replyToId = z.uuid("Invalid reply id.").nullish();
 const caption = z.string().trim().max(1000, "Caption is too long.").nullish();
@@ -22,51 +24,29 @@ export const messagesQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(50).default(30),
 });
 
-export const sendMessageSchema = z.discriminatedUnion("type", [
-  z.object({
-    type: z.literal("TEXT"),
-    clientId,
-    replyToId,
-    content: z
-      .string()
-      .trim()
-      .min(1, "Message can't be empty.")
-      .max(4000, "Message is too long."),
-  }),
-  z.object({
-    type: z.literal("IMAGE"),
-    clientId,
-    replyToId,
-    publicId,
-    content: caption,
-  }),
-  z.object({
-    type: z.literal("VIDEO"),
-    clientId,
-    replyToId,
-    publicId,
-    content: caption,
-  }),
-  z.object({
-    type: z.literal("VOICE"),
-    clientId,
-    replyToId,
-    publicId,
-  }),
-  z.object({
-    type: z.literal("FILE"),
-    clientId,
-    replyToId,
-    publicId,
-    fileName: z.string().trim().min(1).max(150),
-    content: caption,
-  }),
-]);
+export const sendMessageSchema = z
+  .object({
+    clientId: z.uuid("Invalid client id."),
+    type: z.enum(["TEXT", "IMAGE", "VIDEO", "VOICE", "FILE"]),
+    ciphertext: b64(CIPHERTEXT_MAX),
+    keyEpoch: z.number().int().min(1),
+    replyToId: z.uuid().nullish(),
+    media: z
+      .object({
+        publicId: z.string().min(1).max(200),
+        thumbnailPublicId: z.string().min(1).max(200).optional(),
+      })
+      .optional(),
+    keyBundle: keyBundleSchema.optional(),
+    deviceId: z.uuid("Invalid device id."),
+  })
+  .refine(
+    (value) => (value.type === "TEXT") === (value.media === undefined),
+    "Attachments need media, and text messages can't have it.",
+  );
 
 export const signUploadSchema = z.object({
-  kind: z.enum(["IMAGE", "VIDEO", "VOICE", "FILE"]),
-  fileName: z.string().trim().min(1).max(150),
-  mimeType: z.string().trim().min(1).max(100),
+  kind: z.enum(["IMAGE", "VIDEO", "VOICE", "FILE", "THUMB"]),
   size: z.number().int().positive(),
 });
 
@@ -76,7 +56,8 @@ export const messageParamsSchema = z.object({
 });
 
 export const editMessageSchema = z.object({
-  content: z.string().trim().max(4000, "Message is too long."),
+  ciphertext: b64(CIPHERTEXT_MAX),
+  keyEpoch: z.number().int().min(1),
 });
 
 export const reactionSchema = z.object({
