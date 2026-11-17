@@ -27,6 +27,7 @@ for (const key of requiredEnv) {
 }
 
 const PORT = Number(process.env.PORT) || 5000;
+const HOST = process.env.IP || "::";
 // const HOST = "192.168.2.116";
 
 const httpServer = createServer(app);
@@ -39,13 +40,13 @@ void resetStalePresence().catch((error) =>
 httpServer.keepAliveTimeout = 65_000;
 httpServer.headersTimeout = 66_000;
 
-// httpServer.listen(Number(PORT), HOST, () => {
-//   console.log(`Server is running on http://${HOST}:${PORT}`);
-// });
-
-httpServer.listen(PORT, () => {
-  console.log(`🚀 Relay Backend running on http://localhost:${PORT}`);
+httpServer.listen(PORT, HOST, () => {
+  console.log(`🚀 Relay Backend running on http://[${HOST}]:${PORT}`);
 });
+
+// httpServer.listen(PORT, () => {
+//  console.log(`🚀 Relay Backend running on http://localhost:${PORT}`);
+// });
 
 const stopStoryPurge = startStoryPurgeJob();
 
@@ -59,7 +60,6 @@ const shutdown = (signal: string) => {
 
   setTimeout(() => process.exit(1), 10_000).unref();
   stopStoryPurge();
-
   closeSocketServer().then(async () => {
     try {
       try {
